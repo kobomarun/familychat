@@ -6,7 +6,10 @@ CREATE TABLE IF NOT EXISTS messages (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   sender TEXT NOT NULL,
   receiver TEXT NOT NULL,
-  content TEXT NOT NULL,
+  content TEXT,
+  image_url TEXT,
+  image_name TEXT,
+  has_image BOOLEAN DEFAULT FALSE,
   timestamp TIMESTAMPTZ DEFAULT NOW(),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -51,6 +54,26 @@ SELECT cron.schedule(
   'SELECT delete_old_messages();'
 );
 */
+
+-- Create Storage Bucket for Images
+-- You'll need to create this bucket manually in Supabase Dashboard:
+-- 1. Go to Storage section
+-- 2. Click "Create Bucket"
+-- 3. Name: "chat-images"
+-- 4. Set to "Public bucket" (so images can be viewed)
+-- 5. File size limit: 5MB recommended
+
+-- Storage Policy: Allow authenticated uploads (optional, for now allow all since no auth)
+-- You can set RLS policies on storage.objects table if needed
+
+-- Example Storage Policy (run this if you want to restrict uploads):
+-- CREATE POLICY "Allow public uploads to chat-images"
+-- ON storage.objects FOR INSERT
+-- WITH CHECK (bucket_id = 'chat-images');
+
+-- CREATE POLICY "Allow public reads from chat-images"
+-- ON storage.objects FOR SELECT
+-- USING (bucket_id = 'chat-images');
 
 -- Verification queries (optional)
 -- Run these to verify everything is set up correctly:

@@ -20,6 +20,9 @@ A minimal, real-time family chat web app built with **Next.js**, **React**, and 
 - 📍 **Auto-scroll** to latest messages
 - 🔔 **Browser notifications** when new messages arrive
 - 🔊 **Notification sound** for incoming messages
+- 📸 **Camera support** - Take photos directly or select from gallery
+- 🖼️ **Image sharing** - Send photos with messages
+- 🗜️ **Auto compression** - Images are optimized for fast loading
 
 ## 🚀 Quick Start
 
@@ -54,7 +57,10 @@ CREATE TABLE messages (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   sender TEXT NOT NULL,
   receiver TEXT NOT NULL,
-  content TEXT NOT NULL,
+  content TEXT,
+  image_url TEXT,
+  image_name TEXT,
+  has_image BOOLEAN DEFAULT FALSE,
   timestamp TIMESTAMPTZ DEFAULT NOW(),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -75,6 +81,13 @@ CREATE INDEX messages_timestamp_idx ON messages(timestamp DESC);
 
 -- Enable Realtime
 ALTER PUBLICATION supabase_realtime ADD TABLE messages;
+
+-- Create Storage Bucket for Images
+-- 1. Go to Storage section in Supabase Dashboard
+-- 2. Click "Create Bucket"
+-- 3. Name: "chat-images"
+-- 4. Set to "Public bucket" (so images can be viewed)
+-- 5. File size limit: 5MB recommended
 ```
 
 ### 4. Configure Environment Variables
@@ -137,8 +150,12 @@ vercel
 2. **Enable Notifications**: Click the 🔔 icon to allow browser notifications (optional but recommended)
 3. **Select a Contact**: Click on a family member from the left sidebar
 4. **Start Chatting**: Type your message and hit send!
-5. **Add Emojis**: Click the emoji button to add expressions
-6. **Clear Chat**: Use the "Clear Chat" button to delete conversation history
+5. **Share Images**: 
+   - 📸 Tap the camera icon to take a photo
+   - 🖼️ Tap the image icon to select from gallery
+   - Photos are automatically compressed and optimized
+6. **Add Emojis**: Click the emoji button to add expressions
+7. **Clear Chat**: Use the "Clear Chat" button to delete conversation history
 
 ### 🔔 About Notifications
 
@@ -173,6 +190,32 @@ vercel
 
 **Note:** The app will automatically detect iOS and show a banner with installation instructions!
 
+### 📸 Image Sharing
+
+**Features:**
+- **Camera Capture**: Take photos directly from your device camera
+- **Gallery Upload**: Select existing photos from your device
+- **Auto-compression**: Images are automatically resized and compressed to save bandwidth
+- **Smart Thumbnails**: Images show as 200x200px previews in chat
+- **Lightbox Viewer**: Click any image to view full-size with:
+  - Dark overlay background
+  - Download button
+  - Close with ESC, click outside, or close button
+  - Smooth fade-in animation
+- **5MB Limit**: Maximum file size to prevent abuse
+
+**Supported Formats:**
+- JPEG/JPG
+- PNG
+- GIF
+- WebP
+
+**Mobile Support:**
+- ✅ Camera works on iOS Safari (after PWA installation)
+- ✅ Camera works on Android Chrome/Firefox
+- ✅ Front and back camera switching supported
+- ✅ Images compressed before upload for faster sending
+
 ## 🏗️ Project Structure
 
 ```
@@ -182,8 +225,8 @@ familychat/
 │   ├── layout.tsx            # Root layout component
 │   └── page.tsx              # Main chat interface
 ├── lib/
-│   └── supabaseClient.ts     # Supabase client configuration
-├── public/                   # Static assets
+│   └── supabaseClient.ts     # Supabase client + image upload helpers
+├── public/                   # Static assets + PWA icons
 ├── .env.local.example        # Environment variables template
 ├── .gitignore
 ├── next.config.js            # Next.js configuration
@@ -269,6 +312,19 @@ You can create icons at [realfavicongenerator.net](https://realfavicongenerator.
 1. Check your environment variables are correct
 2. Verify RLS policies allow inserting messages
 3. Check browser console for detailed error messages
+
+### Images not uploading?
+
+1. **Create the storage bucket**:
+   - Go to **Storage** in Supabase dashboard
+   - Create bucket named `chat-images`
+   - Set it to **Public** bucket
+
+2. **Check file size**: Images must be under 5MB
+
+3. **Verify file type**: Only JPG, PNG, GIF, and WebP allowed
+
+4. **Storage policies**: Ensure bucket allows public uploads and reads
 
 ### Build errors on Vercel?
 

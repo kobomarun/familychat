@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import { supabase, Message } from '@/lib/supabaseClient'
+import { supabase, Message, uploadImage, compressImage } from '@/lib/supabaseClient'
 import { format } from 'date-fns'
 
 // Family members list
@@ -22,6 +22,13 @@ export default function Home() {
   const [onlineUsers, setOnlineUsers] = useState<string[]>([])
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default')
   const [showIOSInstallPrompt, setShowIOSInstallPrompt] = useState(false)
+  const [selectedImage, setSelectedImage] = useState<File | null>(null)
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const cameraInputRef = useRef<HTMLInputElement>(null)
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null)
 
   // Load current user from localStorage
   useEffect(() => {
@@ -122,12 +129,17 @@ export default function Home() {
             (newMsg.sender === currentUser && newMsg.receiver === selectedContact) ||
             (newMsg.sender === selectedContact && newMsg.receiver === currentUser)
           ) {
-            setMessages((prev) => [...prev, newMsg])
+            // Check if message already exists (prevent duplicates from optimistic updates)
+            setMessages((prev) => {
+              const exists = prev.some(msg => msg.id === newMsg.id)
+              if (exists) return prev
+              return [...prev, newMsg]
+            })
             
             // Show notification if message is from someone else and window is not focused
             if (newMsg.sender !== currentUser) {
               if (!document.hasFocus() || document.hidden) {
-                showNotification(newMsg.sender, newMsg.content)
+                showNotification(newMsg.sender, newMsg.content || 'Sent an image')
               }
             }
           }
@@ -156,6 +168,17 @@ export default function Home() {
     // For now, it's just a placeholder for the feature
   }, [currentUser])
 
+  // Keyboard support for lightbox (ESC to close)
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && lightboxImage) {
+        setLightboxImage(null)
+      }
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [lightboxImage])
+
   const handleSetName = (e: React.FormEvent) => {
     e.preventDefault()
     if (nameInput.trim()) {
@@ -167,25 +190,119 @@ export default function Home() {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newMessage.trim() || !selectedContact) return
+    
+    // Must have either text or image
+    if ((!newMessage.trim() && !selectedImage) || !selectedContact) return
 
-    const message = {
-      sender: currentUser,
-      receiver: selectedContact,
-      content: newMessage.trim(),
-      timestamp: new Date().toISOString(),
+    setIsUploading(true)
+    setUploadProgress(0)
+
+    try {
+      let imageUrl = null
+      let imageName = null
+
+      // Upload image if selected
+      if (selectedImage) {
+        setUploadProgress(30)
+        // Compress image first
+        const compressedImage = await compressImage(selectedImage)
+        setUploadProgress(50)
+        
+        // Upload to Supabase Storage
+        imageUrl = await uploadImage(compressedImage, currentUser)
+        imageName = selectedImage.name
+        
+        if (!imageUrl) {
+          alert('Failed to upload image. Please try again.')
+          setIsUploading(false)
+          return
+        }
+        setUploadProgress(80)
+      }
+
+      const message = {
+        sender: currentUser,
+        receiver: selectedContact,
+        content: newMessage.trim() || null,
+        image_url: imageUrl,
+        image_name: imageName,
+        has_image: !!imageUrl,
+        timestamp: new Date().toISOString(),
+      }
+
+      const { data, error } = await supabase.from('messages').insert([message]).select()
+
+      if (error) {
+        console.error('Error sending message:', error)
+        alert('Failed to send message. Please check your Supabase configuration.')
+        setIsUploading(false)
+        return
+      }
+
+      // Optimistically add message to local state immediately
+      if (data && data.length > 0) {
+        setMessages((prev) => [...prev, data[0] as Message])
+      }
+
+      setUploadProgress(100)
+      setNewMessage('')
+      setSelectedImage(null)
+      setImagePreview(null)
+      setShowEmojiPicker(false)
+    } catch (error) {
+      console.error('Error in handleSendMessage:', error)
+      alert('An error occurred while sending the message.')
+    } finally {
+      setIsUploading(false)
+      setUploadProgress(0)
     }
+  }
 
-    const { error } = await supabase.from('messages').insert([message])
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
 
-    if (error) {
-      console.error('Error sending message:', error)
-      alert('Failed to send message. Please check your Supabase configuration.')
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file')
       return
     }
 
-    setNewMessage('')
-    setShowEmojiPicker(false)
+    // Validate file size (5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Image size must be less than 5MB')
+      return
+    }
+
+    setSelectedImage(file)
+
+    // Create preview
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      setImagePreview(reader.result as string)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleCameraCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setSelectedImage(file)
+
+    // Create preview
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      setImagePreview(reader.result as string)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const cancelImageUpload = () => {
+    setSelectedImage(null)
+    setImagePreview(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+    if (cameraInputRef.current) cameraInputRef.current.value = ''
   }
 
   const handleClearChat = async () => {
@@ -268,6 +385,53 @@ export default function Home() {
   // Main chat interface
   return (
     <div className="min-h-screen bg-chat-bg flex flex-col">
+      {/* Image Lightbox Modal */}
+      {lightboxImage && (
+        <div 
+          className="fixed inset-0 z-50 bg-black bg-opacity-95 flex items-center justify-center p-4 animate-fadeIn"
+          onClick={() => setLightboxImage(null)}
+        >
+          <div className="relative max-w-full max-h-full flex flex-col items-center">
+            {/* Close button */}
+            <button
+              onClick={() => setLightboxImage(null)}
+              className="absolute -top-12 right-0 text-white hover:text-gray-300 text-2xl font-bold bg-gray-800 hover:bg-gray-700 rounded-full w-10 h-10 flex items-center justify-center transition-colors z-10 shadow-lg"
+              title="Close (ESC)"
+            >
+              ✕
+            </button>
+            {/* Image */}
+            <img
+              src={lightboxImage}
+              alt="Full size"
+              className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
+            {/* Action buttons */}
+            <div className="mt-4 flex gap-3">
+              <a
+                href={lightboxImage}
+                download
+                target="_blank"
+                rel="noopener noreferrer"
+                className="bg-primary hover:bg-primary-dark text-white px-6 py-2 rounded-lg font-semibold transition-colors shadow-lg"
+                onClick={(e) => e.stopPropagation()}
+              >
+                📥 Download
+              </a>
+              <button
+                onClick={() => setLightboxImage(null)}
+                className="bg-gray-700 hover:bg-gray-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors shadow-lg"
+              >
+                Close
+              </button>
+            </div>
+            {/* Hint text */}
+            <p className="text-gray-400 text-xs mt-3">Click outside or press ESC to close</p>
+          </div>
+        </div>
+      )}
+
       {/* iOS Install Prompt Banner */}
       {showIOSInstallPrompt && (
         <div className="bg-blue-600 text-white p-4 text-sm">
@@ -433,7 +597,22 @@ export default function Home() {
                             : 'bg-message-received text-white rounded-bl-none'
                         }`}
                       >
-                        <p className="break-words">{message.content}</p>
+                        {/* Display image if present */}
+                        {message.has_image && message.image_url && (
+                          <div className="mb-2">
+                            <img
+                              src={message.image_url}
+                              alt={message.image_name || 'Shared image'}
+                              className="rounded-lg max-w-[200px] max-h-[200px] object-cover cursor-pointer hover:opacity-80 hover:scale-105 transition-all duration-200"
+                              onClick={() => setLightboxImage(message.image_url!)}
+                              loading="lazy"
+                            />
+                          </div>
+                        )}
+                        {/* Display text if present */}
+                        {message.content && (
+                          <p className="break-words">{message.content}</p>
+                        )}
                         <p className="text-xs text-gray-400 mt-1">
                           {format(new Date(message.timestamp), 'HH:mm')}
                         </p>
@@ -447,7 +626,83 @@ export default function Home() {
 
             {/* Message input */}
             <div className="bg-gray-900 border-t border-gray-800 p-4">
+              {/* Image preview */}
+              {imagePreview && (
+                <div className="mb-3 relative inline-block">
+                  <img
+                    src={imagePreview}
+                    alt="Preview"
+                    className="max-h-40 rounded-lg border-2 border-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={cancelImageUpload}
+                    className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {/* Upload progress */}
+              {isUploading && (
+                <div className="mb-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-gray-400">Uploading...</span>
+                    <span className="text-xs text-gray-400">{uploadProgress}%</span>
+                  </div>
+                  <div className="w-full bg-gray-700 rounded-full h-2">
+                    <div
+                      className="bg-primary h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${uploadProgress}%` }}
+                    ></div>
+                  </div>
+                </div>
+              )}
+
               <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+                {/* Hidden file inputs */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageSelect}
+                  className="hidden"
+                />
+                <input
+                  ref={cameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleCameraCapture}
+                  className="hidden"
+                />
+
+                {/* Camera button */}
+                <button
+                  type="button"
+                  onClick={() => cameraInputRef.current?.click()}
+                  className="text-gray-400 hover:text-primary p-2"
+                  title="Take photo"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                </button>
+
+                {/* Gallery/Image picker button */}
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-gray-400 hover:text-primary p-2"
+                  title="Select image"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                </button>
+
                 {/* Emoji picker button */}
                 <div className="relative">
                   <button
@@ -458,7 +713,7 @@ export default function Home() {
                     😊
                   </button>
                   {showEmojiPicker && (
-                    <div className="absolute bottom-full mb-2 bg-gray-800 rounded-lg p-2 shadow-xl border border-gray-700">
+                    <div className="absolute bottom-full mb-2 bg-gray-800 rounded-lg p-2 shadow-xl border border-gray-700 z-10">
                       <div className="grid grid-cols-5 gap-1">
                         {EMOJIS.map((emoji) => (
                           <button
@@ -480,14 +735,15 @@ export default function Home() {
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
                   placeholder="Type a message..."
-                  className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-full focus:outline-none focus:ring-2 focus:ring-primary text-white placeholder-gray-500"
+                  disabled={isUploading}
+                  className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-full focus:outline-none focus:ring-2 focus:ring-primary text-white placeholder-gray-500 disabled:opacity-50"
                 />
                 <button
                   type="submit"
-                  disabled={!newMessage.trim()}
+                  disabled={(!newMessage.trim() && !selectedImage) || isUploading}
                   className="bg-primary hover:bg-primary-dark disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-semibold px-6 py-3 rounded-full transition-colors duration-200"
                 >
-                  Send
+                  {isUploading ? 'Sending...' : 'Send'}
                 </button>
               </form>
             </div>
