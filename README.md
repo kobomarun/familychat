@@ -149,10 +149,13 @@ vercel
 
 ## 🎯 How to Use
 
-1. **Enter Your Name**: On first visit, enter your display name (e.g., "Daddy", "Mummy", "Tosin", "Kemi")
+1. **Enter Your Name**: On first visit, enter your display name (any name you want)
 2. **Enable Notifications**: Click the 🔔 icon to allow browser notifications (optional but recommended)
-3. **Select a Contact**: Click on a family member from the left sidebar
-4. **Start Chatting**: Type your message and hit send!
+3. **Wait for Users**: Other users will appear automatically when they send messages
+   - The app checks for new users every minute
+   - Click the refresh icon to manually check
+4. **Select a Contact**: Click on a user from the "Available Users" list
+5. **Start Chatting**: Type your message and hit send!
 5. **Make Voice Calls**:
    - 📞 Click the phone icon next to any contact name
    - Other person will receive an incoming call notification
@@ -299,13 +302,13 @@ familychat/
 
 ## 📝 Customization
 
-### Add More Family Members
+### User Discovery
 
-Edit the `FAMILY_MEMBERS` array in `app/page.tsx`:
-
-```typescript
-const FAMILY_MEMBERS = ['Daddy', 'Mummy', 'Tosin', 'Kemi', 'NewMember']
-```
+Users are **automatically discovered** from the database:
+- When someone sends a message, they appear in everyone's user list
+- No need to hardcode names
+- New users detected every minute automatically
+- Manual refresh button available
 
 ### Change Color Scheme
 
