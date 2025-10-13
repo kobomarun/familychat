@@ -992,9 +992,11 @@ export default function Home() {
         </div>
       )}
 
-      <div className="flex-1 flex">
-        {/* Sidebar - Contacts List */}
-        <div className="w-80 bg-gray-900 border-r border-gray-800 flex flex-col">
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar - Contacts List (Hidden on mobile when chat is selected) */}
+        <div className={`w-full md:w-80 bg-gray-900 md:border-r border-gray-800 flex flex-col ${
+          selectedContact ? 'hidden md:flex' : 'flex'
+        }`}>
         {/* User header */}
         <div className="p-4 bg-gray-800 border-b border-gray-700 flex items-center justify-between">
           <div className="flex-1">
@@ -1074,10 +1076,10 @@ export default function Home() {
                   <div key={member} className="flex items-center gap-2">
                     <button
                       onClick={() => setSelectedContact(member)}
-                      className={`flex-1 text-left px-4 py-3 rounded-lg transition-colors duration-150 ${
+                      className={`flex-1 text-left px-4 py-4 md:py-3 rounded-lg transition-colors duration-150 active:scale-98 ${
                         selectedContact === member
                           ? 'bg-primary-dark text-white'
-                          : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                          : 'bg-gray-800 text-gray-300 hover:bg-gray-700 active:bg-gray-700'
                       }`}
                     >
                       <div className="flex items-center justify-between">
@@ -1095,7 +1097,7 @@ export default function Home() {
                     <button
                       onClick={() => initiateCall(member)}
                       disabled={callState.isInCall || callState.isCalling || callState.isReceivingCall}
-                      className="p-3 bg-gray-800 hover:bg-primary text-gray-300 hover:text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="p-4 md:p-3 bg-gray-800 hover:bg-primary active:bg-primary text-gray-300 hover:text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
                       title={`Call ${member}`}
                     >
                       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1111,31 +1113,72 @@ export default function Home() {
       </div>
 
       {/* Main chat area */}
-      <div className="flex-1 flex flex-col">
+      <div className={`flex-1 flex flex-col ${
+        selectedContact ? 'flex' : 'hidden md:flex'
+      }`}>
         {selectedContact ? (
           <>
             {/* Chat header */}
-            <div className="bg-gray-900 border-b border-gray-800 p-4 flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-semibold text-white">
-                  {selectedContact}
-                </h2>
-                <p className="text-xs text-gray-400">
-                  {onlineUsers.includes(selectedContact)
-                    ? 'Online'
-                    : 'Offline'}
-                </p>
+            <div className="bg-gray-900 border-b border-gray-800 px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                {/* Back button (mobile only) */}
+                <button
+                  onClick={() => setSelectedContact('')}
+                  className="md:hidden flex-shrink-0 text-gray-400 hover:text-white p-2 -ml-2"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+                
+                {/* Contact info */}
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-lg font-semibold text-white truncate">
+                    {selectedContact}
+                  </h2>
+                  <p className="text-xs text-gray-400">
+                    {onlineUsers.includes(selectedContact) ? 'Online' : 'Offline'}
+                  </p>
+                </div>
               </div>
-              <button
-                onClick={handleClearChat}
-                className="text-gray-400 hover:text-red-400 text-sm px-3 py-1 rounded border border-gray-700 hover:border-red-400 transition-colors"
-              >
-                Clear Chat
-              </button>
+
+              {/* Action buttons */}
+              <div className="flex items-center gap-2 ml-2">
+                {/* Call button - visible on desktop, icon-only on mobile */}
+                <button
+                  onClick={() => initiateCall(selectedContact)}
+                  disabled={callState.isInCall || callState.isCalling || callState.isReceivingCall}
+                  className="p-2 text-gray-400 hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={`Call ${selectedContact}`}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                  </svg>
+                </button>
+
+                {/* Menu button (mobile) */}
+                <button
+                  onClick={handleClearChat}
+                  className="md:hidden p-2 text-gray-400 hover:text-red-400"
+                  title="Clear chat"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+
+                {/* Clear button (desktop) */}
+                <button
+                  onClick={handleClearChat}
+                  className="hidden md:block text-gray-400 hover:text-red-400 text-sm px-3 py-1 rounded border border-gray-700 hover:border-red-400 transition-colors"
+                >
+                  Clear Chat
+                </button>
+              </div>
             </div>
 
             {/* Messages area */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gradient-to-b from-gray-900 to-chat-bg">
+            <div className="flex-1 overflow-y-auto p-3 md:p-4 space-y-3 md:space-y-4 bg-gradient-to-b from-gray-900 to-chat-bg">
               {messages.length === 0 ? (
                 <div className="flex items-center justify-center h-full">
                   <p className="text-gray-500 text-center">
@@ -1153,10 +1196,10 @@ export default function Home() {
                       className={`flex ${isSent ? 'justify-end' : 'justify-start'}`}
                     >
                       <div
-                        className={`max-w-xs lg:max-w-md xl:max-w-lg px-4 py-2 rounded-2xl ${
+                        className={`max-w-[85%] md:max-w-xs lg:max-w-md xl:max-w-lg px-3 py-2 rounded-lg ${
                           isSent
-                            ? 'bg-message-sent text-white rounded-br-none'
-                            : 'bg-message-received text-white rounded-bl-none'
+                            ? 'bg-message-sent text-white rounded-br-sm'
+                            : 'bg-message-received text-white rounded-bl-sm'
                         }`}
                       >
                         {/* Display image if present */}
@@ -1187,7 +1230,7 @@ export default function Home() {
             </div>
 
             {/* Message input */}
-            <div className="bg-gray-900 border-t border-gray-800 p-4">
+            <div className="bg-gray-900 border-t border-gray-800 p-3 md:p-4 safe-bottom">
               {/* Image preview */}
               {imagePreview && (
                 <div className="mb-3 relative inline-block">
@@ -1222,7 +1265,7 @@ export default function Home() {
                 </div>
               )}
 
-              <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+              <form onSubmit={handleSendMessage} className="flex items-end gap-2">
                 {/* Hidden file inputs */}
                 <input
                   ref={fileInputRef}
@@ -1240,72 +1283,83 @@ export default function Home() {
                   className="hidden"
                 />
 
-                {/* Camera button */}
-                <button
-                  type="button"
-                  onClick={() => cameraInputRef.current?.click()}
-                  className="text-gray-400 hover:text-primary p-2"
-                  title="Take photo"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                </button>
-
-                {/* Gallery/Image picker button */}
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="text-gray-400 hover:text-primary p-2"
-                  title="Select image"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                </button>
-
-                {/* Emoji picker button */}
-                <div className="relative">
+                {/* Attachment buttons */}
+                <div className="flex gap-1 pb-2">
+                  {/* Camera button */}
                   <button
                     type="button"
-                    onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                    className="text-gray-400 hover:text-primary text-2xl p-2"
+                    onClick={() => cameraInputRef.current?.click()}
+                    className="text-gray-400 hover:text-primary p-2.5 md:p-2"
+                    title="Take photo"
                   >
-                    😊
+                    <svg className="w-6 h-6 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
                   </button>
-                  {showEmojiPicker && (
-                    <div className="absolute bottom-full mb-2 bg-gray-800 rounded-lg p-2 shadow-xl border border-gray-700 z-10">
-                      <div className="grid grid-cols-5 gap-1">
-                        {EMOJIS.map((emoji) => (
-                          <button
-                            key={emoji}
-                            type="button"
-                            onClick={() => addEmoji(emoji)}
-                            className="text-2xl hover:bg-gray-700 p-1 rounded"
-                          >
-                            {emoji}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+
+                  {/* Gallery/Image picker button */}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-gray-400 hover:text-primary p-2.5 md:p-2"
+                    title="Select image"
+                  >
+                    <svg className="w-6 h-6 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  </button>
                 </div>
 
-                <input
-                  type="text"
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  placeholder="Type a message..."
-                  disabled={isUploading}
-                  className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-full focus:outline-none focus:ring-2 focus:ring-primary text-white placeholder-gray-500 disabled:opacity-50"
-                />
+                {/* Input container */}
+                <div className="flex-1 flex items-end gap-2 bg-gray-800 rounded-3xl px-4 py-2">
+                  {/* Emoji picker button */}
+                  <div className="relative pb-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                      className="text-gray-400 hover:text-primary text-xl"
+                    >
+                      😊
+                    </button>
+                    {showEmojiPicker && (
+                      <div className="absolute bottom-full mb-2 left-0 bg-gray-800 rounded-lg p-2 shadow-xl border border-gray-700 z-10">
+                        <div className="grid grid-cols-5 gap-1">
+                          {EMOJIS.map((emoji) => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              onClick={() => addEmoji(emoji)}
+                              className="text-2xl hover:bg-gray-700 p-1 rounded"
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <input
+                    type="text"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    placeholder="Message"
+                    disabled={isUploading}
+                    className="flex-1 bg-transparent border-none focus:outline-none text-white placeholder-gray-500 disabled:opacity-50 py-2 text-base"
+                  />
+                </div>
+
+                {/* Send button */}
                 <button
                   type="submit"
                   disabled={(!newMessage.trim() && !selectedImage) || isUploading}
-                  className="bg-primary hover:bg-primary-dark disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-semibold px-6 py-3 rounded-full transition-colors duration-200"
+                  className="bg-primary hover:bg-primary-dark disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-semibold p-3 md:p-2.5 rounded-full transition-colors duration-200 flex-shrink-0"
+                  title={isUploading ? 'Sending...' : 'Send'}
                 >
-                  {isUploading ? 'Sending...' : 'Send'}
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                  </svg>
                 </button>
               </form>
             </div>

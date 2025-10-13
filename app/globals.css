@@ -55,4 +55,20 @@ html {
   animation: fadeIn 0.2s ease-in-out;
 }
 
+/* Safe area for iOS notch/home indicator */
+@supports (padding: max(0px)) {
+  .safe-bottom {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+}
+
+/* Active state scale */
+.active\:scale-98:active {
+  transform: scale(0.98);
+}
+
+.active\:scale-95:active {
+  transform: scale(0.95);
+}
+
 
