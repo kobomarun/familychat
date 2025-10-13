@@ -56,6 +56,10 @@ export default function Home() {
   const localStreamRef = useRef<MediaStream | null>(null)
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null)
 
+  // New chat modal
+  const [showNewChatModal, setShowNewChatModal] = useState(false)
+  const [newChatRecipient, setNewChatRecipient] = useState('')
+
   // Load current user from localStorage
   useEffect(() => {
     const savedName = localStorage.getItem('familychat_username')
@@ -709,6 +713,23 @@ export default function Home() {
     }
   }
 
+  const handleStartNewChat = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newChatRecipient.trim()) return
+    
+    // Set as selected contact
+    setSelectedContact(newChatRecipient.trim())
+    
+    // Add to available users if not already there
+    if (!availableUsers.includes(newChatRecipient.trim())) {
+      setAvailableUsers(prev => [...prev, newChatRecipient.trim()].sort())
+    }
+    
+    // Close modal and reset
+    setShowNewChatModal(false)
+    setNewChatRecipient('')
+  }
+
   // Name input screen
   if (!isNameSet) {
     return (
@@ -790,6 +811,47 @@ export default function Home() {
             </div>
             {/* Hint text */}
             <p className="text-gray-400 text-xs mt-3">Click outside or press ESC to close</p>
+          </div>
+        </div>
+      )}
+
+      {/* New Chat Modal */}
+      {showNewChatModal && (
+        <div className="fixed inset-0 z-50 bg-black bg-opacity-90 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full shadow-2xl">
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold text-white mb-2">Start New Chat</h2>
+              <p className="text-gray-400 text-sm">Enter the name of the person you want to message</p>
+            </div>
+            <form onSubmit={handleStartNewChat}>
+              <input
+                type="text"
+                value={newChatRecipient}
+                onChange={(e) => setNewChatRecipient(e.target.value)}
+                placeholder="Enter recipient name..."
+                className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-white placeholder-gray-500 mb-4"
+                autoFocus
+              />
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowNewChatModal(false)
+                    setNewChatRecipient('')
+                  }}
+                  className="flex-1 bg-gray-700 hover:bg-gray-600 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!newChatRecipient.trim()}
+                  className="flex-1 bg-primary hover:bg-primary-dark disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-semibold transition-colors"
+                >
+                  Start Chat
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -976,13 +1038,21 @@ export default function Home() {
                 </svg>
               </button>
             </div>
+            {/* New Chat Button */}
+            <button
+              onClick={() => setShowNewChatModal(true)}
+              className="w-full mb-3 bg-primary hover:bg-primary-dark text-white px-4 py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              New Chat
+            </button>
+
             {availableUsers.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <p className="text-sm mb-2">No other users yet</p>
-                <p className="text-xs">Checking for new users every minute...</p>
-                <div className="mt-3 text-xs text-gray-600">
-                  Tip: Have someone else send you a message to appear here
-                </div>
+              <div className="text-center py-6 text-gray-500">
+                <p className="text-sm mb-2">No recent conversations</p>
+                <p className="text-xs">Click "New Chat" above to start messaging someone</p>
               </div>
             ) : (
               <div className="space-y-1">

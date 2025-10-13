@@ -151,11 +151,13 @@ vercel
 
 1. **Enter Your Name**: On first visit, enter your display name (any name you want)
 2. **Enable Notifications**: Click the 🔔 icon to allow browser notifications (optional but recommended)
-3. **Wait for Users**: Other users will appear automatically when they send messages
-   - The app checks for new users every minute
-   - Click the refresh icon to manually check
-4. **Select a Contact**: Click on a user from the "Available Users" list
-5. **Start Chatting**: Type your message and hit send!
+3. **Start a New Chat**: 
+   - Click the **"New Chat"** button (green button at top of sidebar)
+   - Enter the recipient's name (e.g., "Daddy", "Mummy", "Tosin")
+   - Click "Start Chat"
+   - Start messaging!
+4. **Recent Conversations**: Users you've chatted with will appear in the "Available Users" list
+5. **Auto-Discovery**: New users automatically appear when they message you
 5. **Make Voice Calls**:
    - 📞 Click the phone icon next to any contact name
    - Other person will receive an incoming call notification
