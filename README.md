@@ -23,6 +23,9 @@ A minimal, real-time family chat web app built with **Next.js**, **React**, and 
 - 📸 **Camera support** - Take photos directly or select from gallery
 - 🖼️ **Image sharing** - Send photos with messages
 - 🗜️ **Auto compression** - Images are optimized for fast loading
+- 📞 **Voice calling** - Free peer-to-peer audio calls using WebRTC
+- 🎙️ **Call controls** - Mute/unmute and end call buttons
+- ⏱️ **Call duration** - Real-time call timer
 
 ## 🚀 Quick Start
 
@@ -150,12 +153,16 @@ vercel
 2. **Enable Notifications**: Click the 🔔 icon to allow browser notifications (optional but recommended)
 3. **Select a Contact**: Click on a family member from the left sidebar
 4. **Start Chatting**: Type your message and hit send!
-5. **Share Images**: 
+5. **Make Voice Calls**:
+   - 📞 Click the phone icon next to any contact name
+   - Other person will receive an incoming call notification
+   - Accept to start talking
+6. **Share Images**: 
    - 📸 Tap the camera icon to take a photo
    - 🖼️ Tap the image icon to select from gallery
    - Photos are automatically compressed and optimized
-6. **Add Emojis**: Click the emoji button to add expressions
-7. **Clear Chat**: Use the "Clear Chat" button to delete conversation history
+7. **Add Emojis**: Click the emoji button to add expressions
+8. **Clear Chat**: Use the "Clear Chat" button to delete conversation history
 
 ### 🔔 About Notifications
 
@@ -216,6 +223,38 @@ vercel
 - ✅ Front and back camera switching supported
 - ✅ Images compressed before upload for faster sending
 
+### 📞 Voice Calling
+
+**Features:**
+- **Free Calls**: Peer-to-peer WebRTC audio calls (no costs!)
+- **One-on-One**: Direct calls between two family members
+- **Call Controls**: Mute/unmute microphone, end call
+- **Call Timer**: See how long you've been talking
+- **Incoming Call UI**: Beautiful accept/decline modal
+- **Browser Notifications**: Get notified when someone calls
+
+**How It Works:**
+1. Click the 📞 phone icon next to contact name
+2. Other person sees incoming call notification
+3. They click Accept
+4. You're connected! Start talking
+5. Use controls to mute or end call
+
+**Requirements:**
+- ✅ Microphone access (browser will ask for permission)
+- ✅ Modern browser with WebRTC support (Chrome, Firefox, Safari, Edge)
+- ✅ Both users must be online
+
+**Call Quality:**
+- Direct peer-to-peer connection for best quality
+- Uses Google's free STUN servers for NAT traversal
+- HD audio with echo cancellation and noise suppression
+
+**Limitations:**
+- Only 1-on-1 calls (no group calls)
+- Both users must be online at the same time
+- Calls don't work if behind very strict firewalls (rare)
+
 ## 🏗️ Project Structure
 
 ```
@@ -241,7 +280,8 @@ familychat/
 
 - **Framework**: [Next.js 14](https://nextjs.org/) (App Router)
 - **UI Library**: [React 18](https://react.dev/)
-- **Backend**: [Supabase](https://supabase.com/) (PostgreSQL + Realtime)
+- **Backend**: [Supabase](https://supabase.com/) (PostgreSQL + Realtime + Storage)
+- **Voice Calls**: [WebRTC](https://webrtc.org/) (Peer-to-peer audio)
 - **Styling**: [Tailwind CSS](https://tailwindcss.com/)
 - **Language**: [TypeScript](https://www.typescriptlang.org/)
 - **Date Formatting**: [date-fns](https://date-fns.org/)
@@ -325,6 +365,25 @@ You can create icons at [realfavicongenerator.net](https://realfavicongenerator.
 3. **Verify file type**: Only JPG, PNG, GIF, and WebP allowed
 
 4. **Storage policies**: Ensure bucket allows public uploads and reads
+
+### Calls not connecting?
+
+1. **Check microphone permissions**:
+   - Browser should ask for mic access
+   - Check browser settings if blocked
+   - Try refreshing and allowing again
+
+2. **Both users must be online**:
+   - Calls are peer-to-peer (not server-based)
+   - Both people need to be in the app
+
+3. **Firewall issues**:
+   - Rare, but strict corporate firewalls may block WebRTC
+   - Try on different network (home WiFi, mobile data)
+
+4. **Browser compatibility**:
+   - Use modern browsers: Chrome, Firefox, Safari (iOS 11+), Edge
+   - WebRTC may not work in old browsers
 
 ### Build errors on Vercel?
 

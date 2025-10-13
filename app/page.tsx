@@ -3,6 +3,15 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase, Message, uploadImage, compressImage } from '@/lib/supabaseClient'
 import { format } from 'date-fns'
+import { 
+  createPeerConnection, 
+  getLocalAudioStream, 
+  stopMediaStream, 
+  formatCallDuration,
+  isWebRTCSupported,
+  CallSignal,
+  CallState 
+} from '@/lib/webrtc'
 
 // Family members list
 const FAMILY_MEMBERS = ['Daddy', 'Mummy', 'Tosin', 'Kemi']
@@ -29,6 +38,23 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const [lightboxImage, setLightboxImage] = useState<string | null>(null)
+
+  // Call state
+  const [callState, setCallState] = useState<CallState>({
+    isInCall: false,
+    isCalling: false,
+    isReceivingCall: false,
+    callWith: null,
+    isMuted: false,
+    callStartTime: null,
+  })
+  const [callDuration, setCallDuration] = useState(0)
+  const [incomingCallFrom, setIncomingCallFrom] = useState<string | null>(null)
+  
+  // WebRTC refs
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null)
+  const localStreamRef = useRef<MediaStream | null>(null)
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null)
 
   // Load current user from localStorage
   useEffect(() => {
@@ -178,6 +204,137 @@ export default function Home() {
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
   }, [lightboxImage])
+
+  // Call duration timer
+  useEffect(() => {
+    if (callState.isInCall && callState.callStartTime) {
+      const interval = setInterval(() => {
+        setCallDuration(Math.floor((Date.now() - callState.callStartTime!) / 1000))
+      }, 1000)
+      return () => clearInterval(interval)
+    }
+  }, [callState.isInCall, callState.callStartTime])
+
+  // Listen for call signals
+  useEffect(() => {
+    if (!currentUser) return
+
+    const callChannel = supabase.channel(`call-${currentUser}`)
+    
+    callChannel
+      .on('broadcast', { event: 'call-signal' }, async ({ payload }) => {
+        const signal = payload as CallSignal
+        
+        // Ignore signals not meant for current user
+        if (signal.to !== currentUser) return
+
+        switch (signal.type) {
+          case 'call-request':
+            // Incoming call
+            setIncomingCallFrom(signal.from)
+            setCallState(prev => ({ ...prev, isReceivingCall: true }))
+            showNotification(signal.from, '📞 Incoming voice call...')
+            break
+
+          case 'call-accept':
+            // Call was accepted, create offer
+            if (callState.isCalling && localStreamRef.current) {
+              const pc = createPeerConnection()
+              peerConnectionRef.current = pc
+
+              // Add local stream
+              localStreamRef.current.getTracks().forEach(track => {
+                pc.addTrack(track, localStreamRef.current!)
+              })
+
+              // Handle remote stream
+              pc.ontrack = (event) => {
+                if (remoteAudioRef.current) {
+                  remoteAudioRef.current.srcObject = event.streams[0]
+                  remoteAudioRef.current.play()
+                }
+              }
+
+              // Handle ICE candidates
+              pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                  sendCallSignal({
+                    type: 'ice-candidate',
+                    from: currentUser,
+                    to: signal.from,
+                    data: event.candidate,
+                  })
+                }
+              }
+
+              // Create and send offer
+              const offer = await pc.createOffer()
+              await pc.setLocalDescription(offer)
+              await sendCallSignal({
+                type: 'offer',
+                from: currentUser,
+                to: signal.from,
+                data: offer,
+              })
+
+              setCallState({
+                isInCall: true,
+                isCalling: false,
+                isReceivingCall: false,
+                callWith: signal.from,
+                isMuted: false,
+                callStartTime: Date.now(),
+              })
+            }
+            break
+
+          case 'call-decline':
+            // Call was declined
+            alert(`${signal.from} declined the call`)
+            endCall()
+            break
+
+          case 'call-end':
+            // Call ended by other party
+            endCall()
+            break
+
+          case 'offer':
+            // Receive WebRTC offer
+            if (peerConnectionRef.current) {
+              await peerConnectionRef.current.setRemoteDescription(signal.data)
+              const answer = await peerConnectionRef.current.createAnswer()
+              await peerConnectionRef.current.setLocalDescription(answer)
+              await sendCallSignal({
+                type: 'answer',
+                from: currentUser,
+                to: signal.from,
+                data: answer,
+              })
+            }
+            break
+
+          case 'answer':
+            // Receive WebRTC answer
+            if (peerConnectionRef.current) {
+              await peerConnectionRef.current.setRemoteDescription(signal.data)
+            }
+            break
+
+          case 'ice-candidate':
+            // Receive ICE candidate
+            if (peerConnectionRef.current && signal.data) {
+              await peerConnectionRef.current.addIceCandidate(signal.data)
+            }
+            break
+        }
+      })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(callChannel)
+    }
+  }, [currentUser, callState.isCalling])
 
   const handleSetName = (e: React.FormEvent) => {
     e.preventDefault()
@@ -350,6 +507,162 @@ export default function Home() {
     }
   }
 
+  // WebRTC Call Functions
+  const sendCallSignal = async (signal: Omit<CallSignal, 'timestamp'>) => {
+    const channel = supabase.channel(`call-${signal.to}`)
+    await channel.send({
+      type: 'broadcast',
+      event: 'call-signal',
+      payload: { ...signal, timestamp: new Date().toISOString() }
+    })
+  }
+
+  const initiateCall = async (contactName: string) => {
+    if (!isWebRTCSupported()) {
+      alert('Your browser does not support voice calls')
+      return
+    }
+
+    try {
+      // Get local audio stream
+      const stream = await getLocalAudioStream()
+      localStreamRef.current = stream
+
+      setCallState(prev => ({ ...prev, isCalling: true, callWith: contactName }))
+
+      // Send call request
+      await sendCallSignal({
+        type: 'call-request',
+        from: currentUser,
+        to: contactName,
+      })
+    } catch (error) {
+      console.error('Error initiating call:', error)
+      alert('Could not access microphone. Please check permissions.')
+      setCallState(prev => ({ ...prev, isCalling: false, callWith: null }))
+    }
+  }
+
+  const acceptCall = async () => {
+    if (!incomingCallFrom) return
+
+    try {
+      // Get local audio stream
+      const stream = await getLocalAudioStream()
+      localStreamRef.current = stream
+
+      // Create peer connection
+      const pc = createPeerConnection()
+      peerConnectionRef.current = pc
+
+      // Add local stream to peer connection
+      stream.getTracks().forEach(track => {
+        pc.addTrack(track, stream)
+      })
+
+      // Handle incoming audio stream
+      pc.ontrack = (event) => {
+        if (remoteAudioRef.current) {
+          remoteAudioRef.current.srcObject = event.streams[0]
+          remoteAudioRef.current.play()
+        }
+      }
+
+      // Handle ICE candidates
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendCallSignal({
+            type: 'ice-candidate',
+            from: currentUser,
+            to: incomingCallFrom,
+            data: event.candidate,
+          })
+        }
+      }
+
+      // Send accept signal and wait for offer
+      await sendCallSignal({
+        type: 'call-accept',
+        from: currentUser,
+        to: incomingCallFrom,
+      })
+
+      setCallState({
+        isInCall: true,
+        isCalling: false,
+        isReceivingCall: false,
+        callWith: incomingCallFrom,
+        isMuted: false,
+        callStartTime: Date.now(),
+      })
+      setIncomingCallFrom(null)
+    } catch (error) {
+      console.error('Error accepting call:', error)
+      alert('Could not accept call. Please check microphone permissions.')
+      endCall()
+    }
+  }
+
+  const declineCall = async () => {
+    if (!incomingCallFrom) return
+
+    await sendCallSignal({
+      type: 'call-decline',
+      from: currentUser,
+      to: incomingCallFrom,
+    })
+
+    setIncomingCallFrom(null)
+    setCallState(prev => ({ ...prev, isReceivingCall: false }))
+  }
+
+  const endCall = async () => {
+    // Send end call signal
+    if (callState.callWith) {
+      await sendCallSignal({
+        type: 'call-end',
+        from: currentUser,
+        to: callState.callWith,
+      })
+    }
+
+    // Stop local stream
+    stopMediaStream(localStreamRef.current)
+    localStreamRef.current = null
+
+    // Close peer connection
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close()
+      peerConnectionRef.current = null
+    }
+
+    // Stop remote audio
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = null
+    }
+
+    // Reset call state
+    setCallState({
+      isInCall: false,
+      isCalling: false,
+      isReceivingCall: false,
+      callWith: null,
+      isMuted: false,
+      callStartTime: null,
+    })
+    setCallDuration(0)
+  }
+
+  const toggleMute = () => {
+    if (localStreamRef.current) {
+      const audioTrack = localStreamRef.current.getAudioTracks()[0]
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled
+        setCallState(prev => ({ ...prev, isMuted: !audioTrack.enabled }))
+      }
+    }
+  }
+
   // Name input screen
   if (!isNameSet) {
     return (
@@ -385,6 +698,9 @@ export default function Home() {
   // Main chat interface
   return (
     <div className="min-h-screen bg-chat-bg flex flex-col">
+      {/* Hidden audio element for remote stream */}
+      <audio ref={remoteAudioRef} autoPlay />
+
       {/* Image Lightbox Modal */}
       {lightboxImage && (
         <div 
@@ -428,6 +744,91 @@ export default function Home() {
             </div>
             {/* Hint text */}
             <p className="text-gray-400 text-xs mt-3">Click outside or press ESC to close</p>
+          </div>
+        </div>
+      )}
+
+      {/* Incoming Call Modal */}
+      {incomingCallFrom && (
+        <div className="fixed inset-0 z-50 bg-black bg-opacity-90 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-gray-800 rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl">
+            <div className="mb-6">
+              <div className="w-24 h-24 bg-primary rounded-full mx-auto flex items-center justify-center mb-4 animate-pulse">
+                <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                </svg>
+              </div>
+              <h2 className="text-2xl font-bold text-white mb-2">{incomingCallFrom}</h2>
+              <p className="text-gray-400">Incoming voice call...</p>
+            </div>
+            <div className="flex gap-4 justify-center">
+              <button
+                onClick={declineCall}
+                className="bg-red-500 hover:bg-red-600 text-white px-8 py-3 rounded-full font-semibold transition-colors flex items-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                Decline
+              </button>
+              <button
+                onClick={acceptCall}
+                className="bg-green-500 hover:bg-green-600 text-white px-8 py-3 rounded-full font-semibold transition-colors flex items-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                Accept
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Active Call Controls */}
+      {(callState.isInCall || callState.isCalling) && (
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-40 bg-gray-900 rounded-2xl shadow-2xl p-6 min-w-[300px] border border-gray-700">
+          <div className="text-center mb-4">
+            <p className="text-gray-400 text-sm mb-1">
+              {callState.isCalling ? 'Calling...' : 'In Call'}
+            </p>
+            <h3 className="text-white text-xl font-bold">{callState.callWith}</h3>
+            {callState.isInCall && (
+              <p className="text-primary text-lg font-mono mt-2">
+                {formatCallDuration(callDuration)}
+              </p>
+            )}
+          </div>
+          <div className="flex gap-3 justify-center">
+            <button
+              onClick={toggleMute}
+              className={`p-4 rounded-full transition-colors ${
+                callState.isMuted 
+                  ? 'bg-red-500 hover:bg-red-600' 
+                  : 'bg-gray-700 hover:bg-gray-600'
+              }`}
+              title={callState.isMuted ? 'Unmute' : 'Mute'}
+            >
+              {callState.isMuted ? (
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" clipRule="evenodd" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                </svg>
+              ) : (
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+              )}
+            </button>
+            <button
+              onClick={endCall}
+              className="bg-red-500 hover:bg-red-600 text-white px-6 py-4 rounded-full font-semibold transition-colors flex items-center gap-2"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M5 3a2 2 0 00-2 2v1c0 8.284 6.716 15 15 15h1a2 2 0 002-2v-3.28a1 1 0 00-.684-.948l-4.493-1.498a1 1 0 00-1.21.502l-1.13 2.257a11.042 11.042 0 01-5.516-5.517l2.257-1.128a1 1 0 00.502-1.21L9.228 3.683A1 1 0 008.279 3H5z" />
+              </svg>
+              End Call
+            </button>
           </div>
         </div>
       )}
@@ -521,26 +922,38 @@ export default function Home() {
             <div className="space-y-1">
               {FAMILY_MEMBERS.filter((member) => member !== currentUser).map(
                 (member) => (
-                  <button
-                    key={member}
-                    onClick={() => setSelectedContact(member)}
-                    className={`w-full text-left px-4 py-3 rounded-lg transition-colors duration-150 ${
-                      selectedContact === member
-                        ? 'bg-primary-dark text-white'
-                        : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium">{member}</p>
-                        <p className="text-xs text-gray-400">
-                          {onlineUsers.includes(member)
-                            ? '● Online'
-                            : '○ Offline'}
-                        </p>
+                  <div key={member} className="flex items-center gap-2">
+                    <button
+                      onClick={() => setSelectedContact(member)}
+                      className={`flex-1 text-left px-4 py-3 rounded-lg transition-colors duration-150 ${
+                        selectedContact === member
+                          ? 'bg-primary-dark text-white'
+                          : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium">{member}</p>
+                          <p className="text-xs text-gray-400">
+                            {onlineUsers.includes(member)
+                              ? '● Online'
+                              : '○ Offline'}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  </button>
+                    </button>
+                    {/* Call button */}
+                    <button
+                      onClick={() => initiateCall(member)}
+                      disabled={callState.isInCall || callState.isCalling || callState.isReceivingCall}
+                      className="p-3 bg-gray-800 hover:bg-primary text-gray-300 hover:text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      title={`Call ${member}`}
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                      </svg>
+                    </button>
+                  </div>
                 )
               )}
             </div>
