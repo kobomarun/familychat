@@ -66,9 +66,11 @@ export function formatCallDuration(seconds: number): string {
 // Check if browser supports WebRTC
 export function isWebRTCSupported(): boolean {
   return !!(
+    typeof navigator !== 'undefined' &&
     navigator.mediaDevices &&
-    navigator.mediaDevices.getUserMedia &&
-    window.RTCPeerConnection
+    typeof navigator.mediaDevices.getUserMedia === 'function' &&
+    typeof window !== 'undefined' &&
+    typeof window.RTCPeerConnection === 'function'
   )
 }
 
