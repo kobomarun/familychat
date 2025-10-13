@@ -69,16 +69,10 @@ export default function Home() {
     }
   }, [])
 
-  // Request notification permission
+  // Check notification permission status (don't auto-request on iOS)
   useEffect(() => {
     if ('Notification' in window) {
       setNotificationPermission(Notification.permission)
-      
-      if (Notification.permission === 'default') {
-        Notification.requestPermission().then((permission) => {
-          setNotificationPermission(permission)
-        })
-      }
     }
 
     // Detect iOS Safari and show install prompt if not in standalone mode
@@ -973,9 +967,28 @@ export default function Home() {
             </div>
             <div className="flex items-start gap-2">
               <span className="font-bold">4.</span>
-              <span>Open the app from your <strong>Home Screen</strong></span>
+              <span>Open from <strong>Home Screen</strong>, then click <strong>🔔 Enable Alerts</strong></span>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Notification Permission Banner (iOS PWA) */}
+      {notificationPermission === 'default' && (
+        <div className="bg-yellow-500 text-black p-3 text-sm flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">🔔</span>
+            <div>
+              <p className="font-bold">Enable Notifications</p>
+              <p className="text-xs opacity-80">Get notified when messages arrive</p>
+            </div>
+          </div>
+          <button
+            onClick={requestNotificationPermission}
+            className="bg-black hover:bg-gray-800 text-yellow-400 px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            Enable
+          </button>
         </div>
       )}
 
@@ -996,19 +1009,20 @@ export default function Home() {
               {notificationPermission === 'denied' && (
                 <button
                   onClick={requestNotificationPermission}
-                  className="text-xs text-gray-500 hover:text-blue-400"
-                  title="Click to enable notifications"
+                  className="text-xs text-red-400 hover:text-blue-400 flex items-center gap-1"
+                  title="Notifications are blocked - click to try enabling"
                 >
-                  🔕 Enable
+                  <span>🔕</span>
+                  <span className="font-semibold">Blocked</span>
                 </button>
               )}
               {notificationPermission === 'default' && (
                 <button
                   onClick={requestNotificationPermission}
-                  className="text-xs text-yellow-400 hover:text-blue-400"
-                  title="Click to enable notifications"
+                  className="text-xs bg-yellow-500 hover:bg-yellow-600 text-black px-2 py-1 rounded font-semibold animate-pulse"
+                  title="Click to enable notifications for new messages"
                 >
-                  🔔 Enable
+                  🔔 Enable Alerts
                 </button>
               )}
             </div>

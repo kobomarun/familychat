@@ -67,10 +67,12 @@ Installing Family Chat as a Progressive Web App (PWA) on your iPhone gives you:
 - The app will open in **full-screen mode** (no Safari bars!)
 - It might take a moment to load the first time
 
-#### **Step 9: Allow Notifications**
-- When the app asks: **"Family Chat would like to send you notifications"**
-- Tap **"Allow"** to enable message notifications
-- This is crucial for getting notified when family messages you!
+#### **Step 9: Enable Notifications**
+- After opening from home screen, you'll see a **yellow banner** at the top
+- Banner says: **"Enable Notifications"**
+- Tap the **"Enable"** button
+- When iOS asks permission, tap **"Allow"**
+- ⚠️ **Important**: This step must be done from the home screen app, not Safari!
 
 #### **Step 10: Enter Your Name**
 - Enter your display name (e.g., "Daddy", "Mummy", "Tosin", "Kemi")
@@ -155,6 +157,13 @@ Your messages are stored in the cloud (Supabase), so you can reinstall anytime.
 - ✅ Update to **iOS 16.4** or later
 - ✅ The website must be fully loaded
 - ✅ Try refreshing the page (pull down)
+
+### Notification permission didn't appear
+- ✅ You must open the app from the **home screen icon** (not Safari)
+- ✅ Look for the **yellow banner** at the top saying "Enable Notifications"
+- ✅ Click the **"Enable"** button in the banner
+- ✅ If no banner appears, look for the yellow **"🔔 Enable Alerts"** button next to your name
+- ✅ iOS blocks automatic permission requests - you must click a button
 
 ### Notifications aren't working
 - ✅ Did you install from the **home screen icon**? (not Safari)
