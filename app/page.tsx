@@ -725,8 +725,14 @@ export default function Home() {
   }
 
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log('handleImageSelect called', e.target.files)
     const file = e.target.files?.[0]
-    if (!file) return
+    if (!file) {
+      console.log('No file selected')
+      return
+    }
+
+    console.log('File selected:', file.name, file.type, file.size)
 
     // Validate file type
     if (!file.type.startsWith('image/')) {
@@ -740,25 +746,33 @@ export default function Home() {
       return
     }
 
+    console.log('Setting selected image and creating preview')
     setSelectedImage(file)
 
     // Create preview
     const reader = new FileReader()
     reader.onloadend = () => {
+      console.log('Image preview created')
       setImagePreview(reader.result as string)
     }
     reader.readAsDataURL(file)
   }
 
   const handleCameraCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log('handleCameraCapture called', e.target.files)
     const file = e.target.files?.[0]
-    if (!file) return
+    if (!file) {
+      console.log('No camera file selected')
+      return
+    }
 
+    console.log('Camera file selected:', file.name, file.type, file.size)
     setSelectedImage(file)
 
     // Create preview
     const reader = new FileReader()
     reader.onloadend = () => {
+      console.log('Camera preview created')
       setImagePreview(reader.result as string)
     }
     reader.readAsDataURL(file)
@@ -1697,18 +1711,40 @@ export default function Home() {
                   </button>
                 )}
 
-                {/* Attachment button - only show when not editing */}
+                {/* Attachment buttons - only show when not editing */}
                 {!editingMessage && (
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="text-text-light hover:text-primary p-2"
-                    title="Attach file"
-                  >
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                    </svg>
-                  </button>
+                  <>
+                    {/* Gallery/File picker button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        console.log('Gallery button clicked, fileInputRef:', fileInputRef.current)
+                        fileInputRef.current?.click()
+                      }}
+                      className="text-text-light hover:text-primary p-2"
+                      title="Choose from gallery"
+                    >
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                      </svg>
+                    </button>
+
+                    {/* Camera button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        console.log('Camera button clicked, cameraInputRef:', cameraInputRef.current)
+                        cameraInputRef.current?.click()
+                      }}
+                      className="text-text-light hover:text-primary p-2"
+                      title="Take photo"
+                    >
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                    </button>
+                  </>
                 )}
 
                 {/* Input container */}
