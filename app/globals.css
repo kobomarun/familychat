@@ -3,19 +3,15 @@
 @tailwind utilities;
 
 :root {
-  --foreground-rgb: 255, 255, 255;
-  --background-start-rgb: 10, 10, 10;
-  --background-end-rgb: 10, 10, 10;
+  --foreground-rgb: 33, 37, 41;
+  --background-start-rgb: 248, 249, 250;
+  --background-end-rgb: 248, 249, 250;
 }
 
 body {
   color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+  background: rgb(var(--background-start-rgb));
+  font-family: 'Inter', system-ui, sans-serif;
 }
 
 /* Custom scrollbar */
@@ -24,16 +20,16 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #1a1a1a;
+  background: #F8F9FA;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #404040;
+  background: #DEE2E6;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: #ADB5BD;
 }
 
 /* Smooth scroll behavior */
@@ -69,6 +65,33 @@ html {
 
 .active\:scale-95:active {
   transform: scale(0.95);
+}
+
+/* Modern button styles */
+.btn-primary {
+  @apply bg-primary hover:bg-primary-dark text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200 shadow-md hover:shadow-lg active:scale-95;
+}
+
+.btn-secondary {
+  @apply bg-gray-100 hover:bg-gray-200 text-text-primary font-semibold py-3 px-6 rounded-xl transition-all duration-200 shadow-sm hover:shadow-md active:scale-95;
+}
+
+/* Modern input styles */
+.input-modern {
+  @apply w-full px-4 py-3 bg-white border border-border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent text-text-primary placeholder-text-light transition-all duration-200;
+}
+
+/* Chat message styles */
+.message-bubble {
+  @apply max-w-[75%] px-3 py-2 rounded-2xl shadow-message;
+}
+
+.message-sent {
+  @apply bg-primary text-white rounded-br-md;
+}
+
+.message-received {
+  @apply bg-message-received text-text-primary rounded-bl-md;
 }
 
 

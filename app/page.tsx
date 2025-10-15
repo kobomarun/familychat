@@ -29,6 +29,7 @@ export default function Home() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const [availableUsers, setAvailableUsers] = useState<string[]>([])
   const [onlineUsers, setOnlineUsers] = useState<string[]>([])
+  const [userLastMessages, setUserLastMessages] = useState<{[key: string]: {content: string, timestamp: string, sender: string}}>({})
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default')
   const [showIOSInstallPrompt, setShowIOSInstallPrompt] = useState(false)
   const [selectedImage, setSelectedImage] = useState<File | null>(null)
@@ -59,6 +60,8 @@ export default function Home() {
   // New chat modal
   const [showNewChatModal, setShowNewChatModal] = useState(false)
   const [newChatRecipient, setNewChatRecipient] = useState('')
+  const [isPolling, setIsPolling] = useState(false)
+  const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
 
   // Load current user from localStorage
   useEffect(() => {
@@ -68,6 +71,7 @@ export default function Home() {
       setIsNameSet(true)
     }
   }, [])
+
 
   // Check notification permission status (don't auto-request on iOS)
   useEffect(() => {
@@ -113,9 +117,140 @@ export default function Home() {
     }
   }
 
-  // Fetch messages and set up realtime subscription
+  // Global real-time subscription for all messages involving current user
+  useEffect(() => {
+    if (!currentUser) return
+    
+    const channel = supabase
+      .channel(`user-messages-${currentUser}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `or(sender.eq.${currentUser},receiver.eq.${currentUser})`
+        },
+        (payload) => {
+          const newMsg = payload.new as Message
+          
+          // Only add message if it's part of current conversation
+          if (selectedContact && (
+            (newMsg.sender === currentUser && newMsg.receiver === selectedContact) ||
+            (newMsg.sender === selectedContact && newMsg.receiver === currentUser)
+          )) {
+            // Check if message already exists (prevent duplicates from optimistic updates)
+            setMessages((prev) => {
+              const exists = prev.some(msg => msg.id === newMsg.id)
+              if (exists) return prev
+              return [...prev, newMsg]
+            })
+          }
+          
+          // Update last message for this conversation
+          setUserLastMessages(prev => ({
+            ...prev,
+            [newMsg.sender === currentUser ? newMsg.receiver : newMsg.sender]: {
+              content: newMsg.has_image ? '📷 Photo' : (newMsg.content || ''),
+              timestamp: newMsg.timestamp,
+              sender: newMsg.sender
+            }
+          }))
+          
+          // Refresh available users list (in case new sender appeared)
+          fetchAvailableUsers()
+          
+          // Show notification if message is from someone else and window is not focused
+          if (newMsg.sender !== currentUser) {
+            if (!document.hasFocus() || document.hidden) {
+              showNotification(newMsg.sender, newMsg.content || 'Sent an image')
+            }
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          setRealtimeStatus('connected')
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          setRealtimeStatus('disconnected')
+        } else {
+          setRealtimeStatus('connecting')
+        }
+      })
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [currentUser])
+
+  // Polling fallback for messages (every 3 seconds)
   useEffect(() => {
     if (!currentUser || !selectedContact) return
+
+    const pollMessages = async () => {
+      if (isPolling) return // Prevent overlapping polls
+      
+      setIsPolling(true)
+      
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('*')
+          .or(
+            `and(sender.eq.${currentUser},receiver.eq.${selectedContact}),and(sender.eq.${selectedContact},receiver.eq.${currentUser})`
+          )
+          .order('timestamp', { ascending: true })
+
+        if (error) {
+          return
+        }
+
+        // Only update if we have new messages
+        setMessages((prev) => {
+          if (prev.length !== data.length) {
+            return data || []
+          }
+          return prev
+        })
+      } finally {
+        setIsPolling(false)
+      }
+    }
+
+    // Initial poll
+    pollMessages()
+    
+    // Set up polling interval - more aggressive if real-time is disconnected
+    const pollInterval = realtimeStatus === 'disconnected' ? 1000 : 3000 // 1s if disconnected, 3s if connected
+    const interval = setInterval(pollMessages, pollInterval)
+
+    return () => {
+      clearInterval(interval)
+    }
+  }, [currentUser, selectedContact, realtimeStatus])
+
+  // Polling fallback for available users (every 10 seconds)
+  useEffect(() => {
+    if (!currentUser) return
+
+    const pollUsers = async () => {
+      fetchAvailableUsers()
+    }
+
+    // Set up polling interval for users
+    const interval = setInterval(pollUsers, 10000) // Poll every 10 seconds
+
+    return () => {
+      clearInterval(interval)
+    }
+  }, [currentUser])
+
+  // Fetch messages when selected contact changes
+  useEffect(() => {
+    if (!currentUser || !selectedContact) {
+      setMessages([])
+      return
+    }
 
     const fetchMessages = async () => {
       const { data, error } = await supabase
@@ -127,7 +262,6 @@ export default function Home() {
         .order('timestamp', { ascending: true })
 
       if (error) {
-        console.error('Error fetching messages:', error)
         return
       }
 
@@ -135,48 +269,6 @@ export default function Home() {
     }
 
     fetchMessages()
-
-    // Subscribe to new messages
-    const channel = supabase
-      .channel('messages')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-        },
-        (payload) => {
-          const newMsg = payload.new as Message
-          // Only add message if it's part of current conversation
-          if (
-            (newMsg.sender === currentUser && newMsg.receiver === selectedContact) ||
-            (newMsg.sender === selectedContact && newMsg.receiver === currentUser)
-          ) {
-            // Check if message already exists (prevent duplicates from optimistic updates)
-            setMessages((prev) => {
-              const exists = prev.some(msg => msg.id === newMsg.id)
-              if (exists) return prev
-              return [...prev, newMsg]
-            })
-            
-            // Refresh available users list (in case new sender appeared)
-            fetchAvailableUsers()
-            
-            // Show notification if message is from someone else and window is not focused
-            if (newMsg.sender !== currentUser) {
-              if (!document.hasFocus() || document.hidden) {
-                showNotification(newMsg.sender, newMsg.content || 'Sent an image')
-              }
-            }
-          }
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
   }, [currentUser, selectedContact])
 
   // Auto scroll to bottom
@@ -195,7 +287,6 @@ export default function Home() {
         .select('sender, receiver')
 
       if (error) {
-        console.error('Error fetching users:', error)
         return
       }
 
@@ -206,36 +297,80 @@ export default function Home() {
         if (msg.receiver !== currentUser) uniqueUsers.add(msg.receiver)
       })
 
-      setAvailableUsers(Array.from(uniqueUsers).sort())
+      const usersArray = Array.from(uniqueUsers).sort()
+      setAvailableUsers(usersArray)
+
+      // Get last message for each user
+      const lastMessages: {[key: string]: {content: string, timestamp: string, sender: string}} = {}
+      
+      for (const user of usersArray) {
+        const { data: lastMessage } = await supabase
+          .from('messages')
+          .select('content, timestamp, sender, has_image')
+          .or(
+            `and(sender.eq.${currentUser},receiver.eq.${user}),and(sender.eq.${user},receiver.eq.${currentUser})`
+          )
+          .order('timestamp', { ascending: false })
+          .limit(1)
+          .single()
+
+        if (lastMessage) {
+          lastMessages[user] = {
+            content: lastMessage.has_image ? '📷 Photo' : (lastMessage.content || ''),
+            timestamp: lastMessage.timestamp,
+            sender: lastMessage.sender
+          }
+        }
+      }
+      
+      setUserLastMessages(lastMessages)
     } catch (error) {
-      console.error('Error in fetchAvailableUsers:', error)
+      // Silent error handling
     }
   }
 
-  // Initial fetch and polling every 1 minute
+  // Initial fetch when user logs in
   useEffect(() => {
     if (!currentUser) return
 
     // Fetch immediately
     fetchAvailableUsers()
-
-    // Poll every 1 minute for new users
-    const interval = setInterval(() => {
-      fetchAvailableUsers()
-    }, 60000) // 60 seconds
-
-    return () => clearInterval(interval)
   }, [currentUser])
 
-  // Simulate online status (could be improved with presence)
+  // Determine online status based on recent activity
   useEffect(() => {
     if (!currentUser) return
 
-    // Add current user to online list
-    setOnlineUsers([currentUser])
+    const updateOnlineStatus = async () => {
+      try {
+        // Get all users who have sent messages in the last 5 minutes
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+        
+        const { data, error } = await supabase
+          .from('messages')
+          .select('sender')
+          .gte('timestamp', fiveMinutesAgo)
+          .neq('sender', currentUser)
 
-    // You could enhance this with Supabase Presence
-    // For now, it's just a placeholder for the feature
+        if (error) {
+          return
+        }
+
+        // Extract unique users who were active recently
+        const recentUsers = new Set(data?.map(msg => msg.sender) || [])
+        setOnlineUsers(Array.from(recentUsers))
+      } catch (error) {
+        // Silent error handling
+      }
+    }
+
+    // Initial check
+    updateOnlineStatus()
+    
+    // Update every 30 seconds
+    const interval = setInterval(updateOnlineStatus, 30000)
+    
+    return () => clearInterval(interval)
   }, [currentUser])
 
   // Keyboard support for lightbox (ESC to close)
@@ -393,7 +528,9 @@ export default function Home() {
     e.preventDefault()
     
     // Must have either text or image
-    if ((!newMessage.trim() && !selectedImage) || !selectedContact) return
+    if ((!newMessage.trim() && !selectedImage) || !selectedContact) {
+      return
+    }
 
     setIsUploading(true)
     setUploadProgress(0)
@@ -434,7 +571,6 @@ export default function Home() {
       const { data, error } = await supabase.from('messages').insert([message]).select()
 
       if (error) {
-        console.error('Error sending message:', error)
         alert('Failed to send message. Please check your Supabase configuration.')
         setIsUploading(false)
         return
@@ -451,7 +587,6 @@ export default function Home() {
       setImagePreview(null)
       setShowEmojiPicker(false)
     } catch (error) {
-      console.error('Error in handleSendMessage:', error)
       alert('An error occurred while sending the message.')
     } finally {
       setIsUploading(false)
@@ -724,33 +859,76 @@ export default function Home() {
     setNewChatRecipient('')
   }
 
-  // Name input screen
+  // Name input screen - Modern welcome design
   if (!isNameSet) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-dark to-chat-bg p-4">
-        <div className="bg-gray-900 rounded-2xl shadow-2xl p-8 w-full max-w-md">
-          <div className="text-center mb-8">
-            <h1 className="text-4xl font-bold text-primary mb-2">Family Chat</h1>
-            <p className="text-gray-400">Enter your display name to get started</p>
+      <div className="min-h-screen flex items-center justify-center bg-chat-bg p-4">
+        <div className="w-full max-w-md text-center">
+          {/* Central Icon */}
+          <div className="mb-8">
+            <div className="w-20 h-20 bg-accent-blue rounded-2xl mx-auto flex items-center justify-center mb-6 shadow-lg">
+              {/* Chat bubble icon with three dots */}
+              <div className="relative">
+                <div className="w-12 h-8 bg-accent-gold rounded-lg relative">
+                  {/* Three dots */}
+                  <div className="absolute top-1 left-1 w-1 h-1 bg-accent-blue rounded-full"></div>
+                  <div className="absolute top-1 left-3 w-1 h-1 bg-accent-blue rounded-full"></div>
+                  <div className="absolute top-1 left-5 w-1 h-1 bg-accent-blue rounded-full"></div>
+                </div>
+                {/* Chat tail */}
+                <div className="absolute bottom-0 right-0 w-3 h-3 bg-accent-gold transform rotate-45 translate-x-1 translate-y-1"></div>
+              </div>
+            </div>
           </div>
-          <form onSubmit={handleSetName} className="space-y-4">
-            <div>
+
+          {/* Main Slogan */}
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold text-text-primary leading-tight">
+              Connect instantly,<br />
+              chat freely.
+            </h1>
+          </div>
+
+          {/* Call-to-Action Buttons */}
+          <div className="space-y-4 mb-8">
+            <form onSubmit={handleSetName} className="space-y-4">
               <input
                 type="text"
                 value={nameInput}
                 onChange={(e) => setNameInput(e.target.value)}
-                placeholder="Your name (e.g., Daddy, Mummy)"
-                className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-white placeholder-gray-500"
+                placeholder="Enter your name to get started"
+                className="input-modern"
                 autoFocus
               />
-            </div>
+              <button
+                type="submit"
+                className="btn-primary w-full"
+              >
+                Sign Up
+              </button>
+            </form>
+            
             <button
-              type="submit"
-              className="w-full bg-primary hover:bg-primary-dark text-white font-semibold py-3 rounded-lg transition-colors duration-200"
+              onClick={() => {
+                // For demo purposes, we'll just set a default name
+                setNameInput('Guest User')
+                setIsNameSet(true)
+              }}
+              className="btn-secondary w-full"
             >
-              Continue
+              Login
             </button>
-          </form>
+          </div>
+
+          {/* Footer Link */}
+          <div className="text-center">
+            <a 
+              href="#" 
+              className="text-text-light text-sm underline hover:text-text-secondary transition-colors"
+            >
+              Terms of Service and Privacy Policy
+            </a>
+          </div>
         </div>
       </div>
     )
@@ -811,11 +989,11 @@ export default function Home() {
 
       {/* New Chat Modal */}
       {showNewChatModal && (
-        <div className="fixed inset-0 z-50 bg-black bg-opacity-90 flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
             <div className="mb-6">
-              <h2 className="text-2xl font-bold text-white mb-2">Start New Chat</h2>
-              <p className="text-gray-400 text-sm">Enter the name of the person you want to message</p>
+              <h2 className="text-2xl font-bold text-text-primary mb-2">Start New Chat</h2>
+              <p className="text-text-light text-sm">Enter the name of the person you want to message</p>
             </div>
             <form onSubmit={handleStartNewChat}>
               <input
@@ -823,7 +1001,7 @@ export default function Home() {
                 value={newChatRecipient}
                 onChange={(e) => setNewChatRecipient(e.target.value)}
                 placeholder="Enter recipient name..."
-                className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-white placeholder-gray-500 mb-4"
+                className="input-modern mb-4"
                 autoFocus
               />
               <div className="flex gap-3">
@@ -833,14 +1011,14 @@ export default function Home() {
                     setShowNewChatModal(false)
                     setNewChatRecipient('')
                   }}
-                  className="flex-1 bg-gray-700 hover:bg-gray-600 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
+                  className="btn-secondary flex-1"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={!newChatRecipient.trim()}
-                  className="flex-1 bg-primary hover:bg-primary-dark disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-semibold transition-colors"
+                  className="btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Start Chat
                 </button>
@@ -852,16 +1030,16 @@ export default function Home() {
 
       {/* Incoming Call Modal */}
       {incomingCallFrom && (
-        <div className="fixed inset-0 z-50 bg-black bg-opacity-90 flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-gray-800 rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl">
             <div className="mb-6">
               <div className="w-24 h-24 bg-primary rounded-full mx-auto flex items-center justify-center mb-4 animate-pulse">
                 <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
                 </svg>
               </div>
-              <h2 className="text-2xl font-bold text-white mb-2">{incomingCallFrom}</h2>
-              <p className="text-gray-400">Incoming voice call...</p>
+              <h2 className="text-2xl font-bold text-text-primary mb-2">{incomingCallFrom}</h2>
+              <p className="text-text-light">Incoming voice call...</p>
             </div>
             <div className="flex gap-4 justify-center">
               <button
@@ -889,12 +1067,12 @@ export default function Home() {
 
       {/* Active Call Controls */}
       {(callState.isInCall || callState.isCalling) && (
-        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-40 bg-gray-900 rounded-2xl shadow-2xl p-6 min-w-[300px] border border-gray-700">
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-40 bg-white rounded-2xl shadow-2xl p-6 min-w-[300px] border border-border-light">
           <div className="text-center mb-4">
-            <p className="text-gray-400 text-sm mb-1">
+            <p className="text-text-light text-sm mb-1">
               {callState.isCalling ? 'Calling...' : 'In Call'}
             </p>
-            <h3 className="text-white text-xl font-bold">{callState.callWith}</h3>
+            <h3 className="text-text-primary text-xl font-bold">{callState.callWith}</h3>
             {callState.isInCall && (
               <p className="text-primary text-lg font-mono mt-2">
                 {formatCallDuration(callDuration)}
@@ -907,7 +1085,7 @@ export default function Home() {
               className={`p-4 rounded-full transition-colors ${
                 callState.isMuted 
                   ? 'bg-red-500 hover:bg-red-600' 
-                  : 'bg-gray-700 hover:bg-gray-600'
+                  : 'bg-gray-200 hover:bg-gray-300'
               }`}
               title={callState.isMuted ? 'Unmute' : 'Mute'}
             >
@@ -917,7 +1095,7 @@ export default function Home() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
                 </svg>
               ) : (
-                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-6 h-6 text-text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                 </svg>
               )}
@@ -994,121 +1172,127 @@ export default function Home() {
 
       <div className="flex-1 flex overflow-hidden">
         {/* Sidebar - Contacts List (Hidden on mobile when chat is selected) */}
-        <div className={`w-full md:w-80 bg-gray-900 md:border-r border-gray-800 flex flex-col ${
+        <div className={`w-full md:w-80 bg-chat-header md:border-r border-border-light flex flex-col ${
           selectedContact ? 'hidden md:flex' : 'flex'
         }`}>
-        {/* User header */}
-        <div className="p-4 bg-gray-800 border-b border-gray-700 flex items-center justify-between">
+        {/* Header */}
+        <div className="p-4 bg-chat-header border-b border-border-light flex items-center justify-between">
           <div className="flex-1">
-            <h2 className="text-xl font-semibold text-white">{currentUser}</h2>
-            <div className="flex items-center gap-2">
-              <p className="text-xs text-green-400">● Online</p>
-              {notificationPermission === 'granted' && (
-                <span className="text-xs text-blue-400" title="Notifications enabled">
-                  🔔
-                </span>
-              )}
-              {notificationPermission === 'denied' && (
-                <button
-                  onClick={requestNotificationPermission}
-                  className="text-xs text-red-400 hover:text-blue-400 flex items-center gap-1"
-                  title="Notifications are blocked - click to try enabling"
-                >
-                  <span>🔕</span>
-                  <span className="font-semibold">Blocked</span>
-                </button>
-              )}
-              {notificationPermission === 'default' && (
-                <button
-                  onClick={requestNotificationPermission}
-                  className="text-xs bg-yellow-500 hover:bg-yellow-600 text-black px-2 py-1 rounded font-semibold animate-pulse"
-                  title="Click to enable notifications for new messages"
-                >
-                  🔔 Enable Alerts
-                </button>
-              )}
+            <h2 className="text-xl font-bold text-text-primary">Chats</h2>
+            <p className="text-xs text-text-light">Logged in as: {currentUser}</p>
+            <p className="text-xs text-text-light">Available users: {availableUsers.length}</p>
+            <div className="flex items-center gap-2 text-xs">
+              <span className={`w-2 h-2 rounded-full ${
+                realtimeStatus === 'connected' ? 'bg-green-500' : 
+                realtimeStatus === 'connecting' ? 'bg-yellow-500' : 'bg-red-500'
+              }`}></span>
+              <span className="text-text-light">
+                {realtimeStatus === 'connected' ? 'Real-time active' : 
+                 realtimeStatus === 'connecting' ? 'Connecting...' : 'Polling mode'}
+              </span>
             </div>
+            {isPolling && <p className="text-xs text-primary">🔄 Checking for messages...</p>}
           </div>
-          <button
-            onClick={handleLogout}
-            className="text-gray-400 hover:text-red-400 text-sm"
-          >
-            Logout
-          </button>
+          <div className="flex items-center gap-3">
+            {/* Refresh users button */}
+            <button 
+              onClick={fetchAvailableUsers}
+              className="text-text-light hover:text-primary transition-colors"
+              title="Refresh user list"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+            {/* Search icon */}
+            <button className="text-text-light hover:text-text-primary transition-colors">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </button>
+            {/* More options icon */}
+            <button className="text-text-light hover:text-text-primary transition-colors">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Contacts list */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="p-3">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs text-gray-500 uppercase font-semibold">
-                Available Users
-              </h3>
-              <button
-                onClick={fetchAvailableUsers}
-                className="text-xs text-primary hover:text-primary-dark"
-                title="Refresh user list"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              </button>
-            </div>
-            {/* New Chat Button */}
-            <button
-              onClick={() => setShowNewChatModal(true)}
-              className="w-full mb-3 bg-primary hover:bg-primary-dark text-white px-4 py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              New Chat
-            </button>
-
-            {availableUsers.length === 0 ? (
-              <div className="text-center py-6 text-gray-500">
-                <p className="text-sm mb-2">No recent conversations</p>
-                <p className="text-xs">Click "New Chat" above to start messaging someone</p>
+        <div className="flex-1 overflow-y-auto bg-chat-bg">
+          {availableUsers.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="text-center text-text-light py-12">
+                <div className="w-16 h-16 bg-gray-200 rounded-full mx-auto mb-4 flex items-center justify-center">
+                  <svg className="w-8 h-8 text-text-light" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                </div>
+                <p className="text-sm font-medium text-text-primary mb-1">No chats yet</p>
+                <p className="text-xs text-text-light">Start a conversation with family members</p>
               </div>
-            ) : (
-              <div className="space-y-1">
-                {availableUsers.map((member) => (
-                  <div key={member} className="flex items-center gap-2">
-                    <button
-                      onClick={() => setSelectedContact(member)}
-                      className={`flex-1 text-left px-4 py-4 md:py-3 rounded-lg transition-colors duration-150 active:scale-98 ${
-                        selectedContact === member
-                          ? 'bg-primary-dark text-white'
-                          : 'bg-gray-800 text-gray-300 hover:bg-gray-700 active:bg-gray-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium">{member}</p>
-                          <p className="text-xs text-gray-400">
-                            {onlineUsers.includes(member)
-                              ? '● Online'
-                              : '○ Offline'}
+            </div>
+          ) : (
+            <div className="p-0">
+              {availableUsers.map((member) => (
+                <div key={member} className="border-b border-border-light last:border-b-0">
+                  <button
+                    onClick={() => setSelectedContact(member)}
+                    className={`w-full text-left px-4 py-4 hover:bg-gray-50 transition-colors duration-150 ${
+                      selectedContact === member ? 'bg-gray-50' : ''
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      {/* Avatar */}
+                      <div className="w-12 h-12 bg-gradient-to-br from-primary to-primary-dark rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm">
+                        {member.charAt(0).toUpperCase()}
+                      </div>
+                      
+                      {/* Contact info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <h3 className="font-medium text-text-primary truncate">{member}</h3>
+                          <span className="text-xs text-text-light">
+                            {onlineUsers.includes(member) ? 'Online' : 'Offline'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm text-text-light truncate">
+                            {userLastMessages[member] ? (
+                              userLastMessages[member].sender === currentUser ? 
+                                `You: ${userLastMessages[member].content}` : 
+                                userLastMessages[member].content
+                            ) : (
+                              'No messages yet'
+                            )}
                           </p>
+                          {userLastMessages[member] && (
+                            <span className="text-xs text-text-light ml-2">
+                              {format(new Date(userLastMessages[member].timestamp), 'HH:mm')}
+                            </span>
+                          )}
                         </div>
                       </div>
-                    </button>
-                    {/* Call button */}
-                    <button
-                      onClick={() => initiateCall(member)}
-                      disabled={callState.isInCall || callState.isCalling || callState.isReceivingCall}
-                      className="p-4 md:p-3 bg-gray-800 hover:bg-primary active:bg-primary text-gray-300 hover:text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
-                      title={`Call ${member}`}
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                      </svg>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                    </div>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        
+        {/* Floating Action Button */}
+        <div className="absolute bottom-6 right-6">
+          <button
+            onClick={() => setShowNewChatModal(true)}
+            className="w-14 h-14 bg-primary hover:bg-primary-dark text-white rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center active:scale-95"
+            title="New Chat"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -1119,118 +1303,165 @@ export default function Home() {
         {selectedContact ? (
           <>
             {/* Chat header */}
-            <div className="bg-gray-900 border-b border-gray-800 px-4 py-3 flex items-center justify-between">
+            <div className="bg-chat-header border-b border-border-light px-4 py-3 flex items-center justify-between">
               <div className="flex items-center gap-3 flex-1 min-w-0">
                 {/* Back button (mobile only) */}
                 <button
                   onClick={() => setSelectedContact('')}
-                  className="md:hidden flex-shrink-0 text-gray-400 hover:text-white p-2 -ml-2"
+                  className="md:hidden flex-shrink-0 text-text-light hover:text-text-primary p-2 -ml-2"
                 >
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                   </svg>
                 </button>
                 
+                {/* Avatar */}
+                <div className="w-10 h-10 bg-gradient-to-br from-primary to-primary-dark rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm">
+                  {selectedContact.charAt(0).toUpperCase()}
+                </div>
+                
                 {/* Contact info */}
                 <div className="flex-1 min-w-0">
-                  <h2 className="text-lg font-semibold text-white truncate">
+                  <h2 className="text-lg font-bold text-text-primary truncate">
                     {selectedContact}
                   </h2>
-                  <p className="text-xs text-gray-400">
-                    {onlineUsers.includes(selectedContact) ? 'Online' : 'Offline'}
+                  <p className="text-xs text-text-light">
+                    {onlineUsers.includes(selectedContact) ? 'online' : 'offline'}
                   </p>
                 </div>
               </div>
 
               {/* Action buttons */}
               <div className="flex items-center gap-2 ml-2">
-                {/* Call button - visible on desktop, icon-only on mobile */}
+                {/* Refresh messages button */}
+                <button
+                  onClick={() => {
+                    const fetchMessages = async () => {
+                      const { data, error } = await supabase
+                        .from('messages')
+                        .select('*')
+                        .or(
+                          `and(sender.eq.${currentUser},receiver.eq.${selectedContact}),and(sender.eq.${selectedContact},receiver.eq.${currentUser})`
+                        )
+                        .order('timestamp', { ascending: true })
+
+                      if (error) {
+                        return
+                      }
+
+                      setMessages(data || [])
+                    }
+                    fetchMessages()
+                  }}
+                  className="p-2 text-text-light hover:text-primary transition-colors"
+                  title="Refresh messages"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
+
+                {/* Video call button */}
+                <button
+                  className="p-2 text-text-light hover:text-accent-blue transition-colors"
+                  title="Video call"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                </button>
+
+                {/* Voice call button */}
                 <button
                   onClick={() => initiateCall(selectedContact)}
                   disabled={callState.isInCall || callState.isCalling || callState.isReceivingCall}
-                  className="p-2 text-gray-400 hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-2 text-text-light hover:text-accent-blue disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   title={`Call ${selectedContact}`}
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
                   </svg>
                 </button>
-
-                {/* Menu button (mobile) */}
-                <button
-                  onClick={handleClearChat}
-                  className="md:hidden p-2 text-gray-400 hover:text-red-400"
-                  title="Clear chat"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
-
-                {/* Clear button (desktop) */}
-                <button
-                  onClick={handleClearChat}
-                  className="hidden md:block text-gray-400 hover:text-red-400 text-sm px-3 py-1 rounded border border-gray-700 hover:border-red-400 transition-colors"
-                >
-                  Clear Chat
-                </button>
               </div>
             </div>
 
             {/* Messages area */}
-            <div className="flex-1 overflow-y-auto p-3 md:p-4 space-y-3 md:space-y-4 bg-gradient-to-b from-gray-900 to-chat-bg">
-              {messages.length === 0 ? (
-                <div className="flex items-center justify-center h-full">
-                  <p className="text-gray-500 text-center">
-                    No messages yet.
-                    <br />
-                    Send a message to start the conversation!
-                  </p>
+            <div className="flex-1 overflow-y-auto bg-chat-bg">
+              {/* Date separator */}
+              <div className="text-center py-2">
+                <div className="inline-block bg-gray-200 text-text-light text-xs px-3 py-1 rounded-full">
+                  Today
                 </div>
-              ) : (
-                messages.map((message) => {
-                  const isSent = message.sender === currentUser
-                  return (
-                    <div
-                      key={message.id}
-                      className={`flex ${isSent ? 'justify-end' : 'justify-start'}`}
-                    >
+              </div>
+              
+              <div className="p-4 space-y-4">
+                {messages.length === 0 ? (
+                  <div className="flex items-center justify-center h-full">
+                    <p className="text-text-light text-center">
+                      No messages yet.
+                      <br />
+                      Send a message to start the conversation!
+                    </p>
+                  </div>
+                ) : (
+                  messages.map((message) => {
+                    const isSent = message.sender === currentUser
+                    return (
                       <div
-                        className={`max-w-[85%] md:max-w-xs lg:max-w-md xl:max-w-lg px-3 py-2 rounded-lg ${
-                          isSent
-                            ? 'bg-message-sent text-white rounded-br-sm'
-                            : 'bg-message-received text-white rounded-bl-sm'
-                        }`}
+                        key={message.id}
+                        className={`flex ${isSent ? 'justify-end' : 'justify-start'}`}
                       >
-                        {/* Display image if present */}
-                        {message.has_image && message.image_url && (
-                          <div className="mb-2">
-                            <img
-                              src={message.image_url}
-                              alt={message.image_name || 'Shared image'}
-                              className="rounded-lg max-w-[200px] max-h-[200px] object-cover cursor-pointer hover:opacity-80 hover:scale-105 transition-all duration-200"
-                              onClick={() => setLightboxImage(message.image_url!)}
-                              loading="lazy"
-                            />
+                        <div className="flex items-end gap-2 max-w-[85%]">
+                          {/* Avatar for received messages */}
+                          {!isSent && (
+                            <div className="w-8 h-8 bg-gradient-to-br from-primary to-primary-dark rounded-full flex items-center justify-center text-white font-semibold text-xs shadow-sm">
+                              {message.sender.charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                          
+                          <div className={`message-bubble ${
+                            isSent ? 'message-sent' : 'message-received'
+                          }`}>
+                            {/* Display image if present */}
+                            {message.has_image && message.image_url && (
+                              <div className="mb-2">
+                                <img
+                                  src={message.image_url}
+                                  alt={message.image_name || 'Shared image'}
+                                  className="rounded-lg max-w-[250px] max-h-[250px] object-cover cursor-pointer hover:opacity-90 transition-all duration-200"
+                                  onClick={() => setLightboxImage(message.image_url!)}
+                                  loading="lazy"
+                                />
+                              </div>
+                            )}
+                            {/* Display text if present */}
+                            {message.content && (
+                              <p className="break-words text-sm leading-relaxed">{message.content}</p>
+                            )}
+                            <p className={`text-xs mt-1 ${
+                              isSent ? 'text-white/70' : 'text-text-light'
+                            }`}>
+                              {format(new Date(message.timestamp), 'HH:mm')}
+                              {isSent && (
+                                <span className="ml-1">
+                                  <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                </span>
+                              )}
+                            </p>
                           </div>
-                        )}
-                        {/* Display text if present */}
-                        {message.content && (
-                          <p className="break-words">{message.content}</p>
-                        )}
-                        <p className="text-xs text-gray-400 mt-1">
-                          {format(new Date(message.timestamp), 'HH:mm')}
-                        </p>
+                        </div>
                       </div>
-                    </div>
-                  )
-                })
-              )}
-              <div ref={messagesEndRef} />
+                    )
+                  })
+                )}
+                <div ref={messagesEndRef} />
+              </div>
             </div>
 
             {/* Message input */}
-            <div className="bg-gray-900 border-t border-gray-800 p-3 md:p-4 safe-bottom">
+            <div className="bg-chat-header border-t border-border-light p-4 safe-bottom">
               {/* Image preview */}
               {imagePreview && (
                 <div className="mb-3 relative inline-block">
@@ -1253,10 +1484,10 @@ export default function Home() {
               {isUploading && (
                 <div className="mb-3">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-gray-400">Uploading...</span>
-                    <span className="text-xs text-gray-400">{uploadProgress}%</span>
+                    <span className="text-xs text-text-light">Uploading...</span>
+                    <span className="text-xs text-text-light">{uploadProgress}%</span>
                   </div>
-                  <div className="w-full bg-gray-700 rounded-full h-2">
+                  <div className="w-full bg-gray-200 rounded-full h-2">
                     <div
                       className="bg-primary h-2 rounded-full transition-all duration-300"
                       style={{ width: `${uploadProgress}%` }}
@@ -1283,104 +1514,91 @@ export default function Home() {
                   className="hidden"
                 />
 
-                {/* Attachment buttons */}
-                <div className="flex gap-1 pb-2">
-                  {/* Camera button */}
-                  <button
-                    type="button"
-                    onClick={() => cameraInputRef.current?.click()}
-                    className="text-gray-400 hover:text-primary p-2.5 md:p-2"
-                    title="Take photo"
-                  >
-                    <svg className="w-6 h-6 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                  </button>
-
-                  {/* Gallery/Image picker button */}
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="text-gray-400 hover:text-primary p-2.5 md:p-2"
-                    title="Select image"
-                  >
-                    <svg className="w-6 h-6 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                  </button>
-                </div>
+                {/* Attachment button */}
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-text-light hover:text-primary p-2"
+                  title="Attach file"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                </button>
 
                 {/* Input container */}
-                <div className="flex-1 flex items-end gap-2 bg-gray-800 rounded-3xl px-4 py-2">
-                  {/* Emoji picker button */}
-                  <div className="relative pb-1">
-                    <button
-                      type="button"
-                      onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                      className="text-gray-400 hover:text-primary text-xl"
-                    >
-                      😊
-                    </button>
-                    {showEmojiPicker && (
-                      <div className="absolute bottom-full mb-2 left-0 bg-gray-800 rounded-lg p-2 shadow-xl border border-gray-700 z-10">
-                        <div className="grid grid-cols-5 gap-1">
-                          {EMOJIS.map((emoji) => (
-                            <button
-                              key={emoji}
-                              type="button"
-                              onClick={() => addEmoji(emoji)}
-                              className="text-2xl hover:bg-gray-700 p-1 rounded"
-                            >
-                              {emoji}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
+                <div className="flex-1 flex items-center gap-2 bg-gray-100 rounded-3xl px-4 py-3">
                   <input
                     type="text"
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
-                    placeholder="Message"
+                    placeholder="Type a message..."
                     disabled={isUploading}
-                    className="flex-1 bg-transparent border-none focus:outline-none text-white placeholder-gray-500 disabled:opacity-50 py-2 text-base"
+                    className="flex-1 bg-transparent border-none focus:outline-none text-text-primary placeholder-text-light disabled:opacity-50 text-base"
                   />
                 </div>
 
-                {/* Send button */}
-                <button
-                  type="submit"
-                  disabled={(!newMessage.trim() && !selectedImage) || isUploading}
-                  className="bg-primary hover:bg-primary-dark disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-semibold p-3 md:p-2.5 rounded-full transition-colors duration-200 flex-shrink-0"
-                  title={isUploading ? 'Sending...' : 'Send'}
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                  </svg>
-                </button>
+                {/* Emoji and send buttons */}
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                    className="text-text-light hover:text-primary text-xl p-2"
+                    title="Emoji"
+                  >
+                    😊
+                  </button>
+                  {showEmojiPicker && (
+                    <div className="absolute bottom-16 right-4 bg-white rounded-lg p-2 shadow-xl border border-border-light z-10">
+                      <div className="grid grid-cols-5 gap-1">
+                        {EMOJIS.map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            onClick={() => addEmoji(emoji)}
+                            className="text-2xl hover:bg-gray-100 p-1 rounded"
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  <button
+                    type="submit"
+                    disabled={(!newMessage.trim() && !selectedImage) || isUploading}
+                    className="text-text-light hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed p-2"
+                    title={isUploading ? 'Sending...' : 'Send'}
+                  >
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                    </svg>
+                  </button>
+                </div>
               </form>
             </div>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center bg-gradient-to-b from-gray-900 to-chat-bg">
-            <div className="text-center text-gray-500">
-              <svg
-                className="w-32 h-32 mx-auto mb-4 text-gray-700"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-                />
-              </svg>
-              <p className="text-xl">Select a family member to start chatting</p>
+          <div className="flex-1 flex items-center justify-center bg-chat-bg">
+            <div className="text-center text-text-light">
+              <div className="w-24 h-24 bg-gray-200 rounded-full mx-auto mb-6 flex items-center justify-center">
+                <svg
+                  className="w-12 h-12 text-text-light"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={1.5}
+                    d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                  />
+                </svg>
+              </div>
+              <p className="text-lg font-medium text-text-primary mb-2">Select a chat to start messaging</p>
+              <p className="text-sm text-text-light">Choose a conversation from the sidebar to begin</p>
             </div>
           </div>
         )}
