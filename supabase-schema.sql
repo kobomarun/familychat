@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS messages (
   image_name TEXT,
   has_image BOOLEAN DEFAULT FALSE,
   timestamp TIMESTAMPTZ DEFAULT NOW(),
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  edited BOOLEAN DEFAULT FALSE,
+  edited_at TIMESTAMPTZ
 );
 
 -- Enable Row Level Security (RLS)

@@ -20,6 +20,8 @@ export interface Message {
   has_image?: boolean
   timestamp: string
   created_at?: string
+  edited?: boolean
+  edited_at?: string
 }
 
 // Image upload configuration

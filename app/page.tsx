@@ -31,6 +31,9 @@ export default function Home() {
   const [onlineUsers, setOnlineUsers] = useState<string[]>([])
   const [userLastMessages, setUserLastMessages] = useState<{[key: string]: {content: string, timestamp: string, sender: string}}>({})
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default')
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null)
+  const [editText, setEditText] = useState('')
+  const [showMessageActions, setShowMessageActions] = useState<{messageId: string, x: number, y: number} | null>(null)
   const [showIOSInstallPrompt, setShowIOSInstallPrompt] = useState(false)
   const [selectedImage, setSelectedImage] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
@@ -527,6 +530,12 @@ export default function Home() {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
     
+    // Handle message editing
+    if (editingMessage) {
+      await handleEditMessage()
+      return
+    }
+    
     // Must have either text or image
     if ((!newMessage.trim() && !selectedImage) || !selectedContact) {
       return
@@ -592,6 +601,127 @@ export default function Home() {
       setIsUploading(false)
       setUploadProgress(0)
     }
+  }
+
+  const handleEditMessage = async () => {
+    if (!editingMessage || !newMessage.trim()) {
+      setEditingMessage(null)
+      setEditText('')
+      setNewMessage('')
+      return
+    }
+
+    try {
+      // First try to update with edited fields
+      let { error } = await supabase
+        .from('messages')
+        .update({ 
+          content: newMessage.trim(),
+          edited: true,
+          edited_at: new Date().toISOString()
+        })
+        .eq('id', editingMessage.id)
+
+      // If error (possibly due to missing columns), try without edited fields
+      if (error) {
+        const { error: simpleError } = await supabase
+          .from('messages')
+          .update({ 
+            content: newMessage.trim()
+          })
+          .eq('id', editingMessage.id)
+        
+        if (simpleError) {
+          alert('Failed to edit message. Error: ' + simpleError.message + '\n\nPlease run the database migration script.')
+          return
+        }
+      }
+
+      // Update local state
+      setMessages((prev) => 
+        prev.map(msg => 
+          msg.id === editingMessage.id 
+            ? { ...msg, content: newMessage.trim(), edited: true, edited_at: new Date().toISOString() }
+            : msg
+        )
+      )
+
+      // Update last message in chat list if this is the last message in the conversation
+      const otherUser = editingMessage.sender === currentUser ? editingMessage.receiver : editingMessage.sender
+      setUserLastMessages(prev => ({
+        ...prev,
+        [otherUser]: {
+          content: newMessage.trim(),
+          timestamp: editingMessage.timestamp,
+          sender: editingMessage.sender
+        }
+      }))
+
+      setEditingMessage(null)
+      setEditText('')
+      setNewMessage('')
+    } catch (error) {
+      alert('An error occurred while editing the message: ' + (error as Error).message)
+    }
+  }
+
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!confirm('Are you sure you want to delete this message?')) {
+      return
+    }
+
+    try {
+      const { error } = await supabase
+        .from('messages')
+        .delete()
+        .eq('id', messageId)
+
+      if (error) {
+        alert('Failed to delete message. Please try again.')
+        return
+      }
+
+      // Remove from local state
+      setMessages((prev) => prev.filter(msg => msg.id !== messageId))
+
+      // Refresh last messages in chat list
+      fetchAvailableUsers()
+
+      setShowMessageActions(null)
+    } catch (error) {
+      alert('An error occurred while deleting the message.')
+    }
+  }
+
+  const startEditing = (message: Message) => {
+    if (message.sender !== currentUser) return // Only allow editing own messages
+    setEditingMessage(message)
+    setEditText(message.content || '')
+    setNewMessage(message.content || '')
+    setShowMessageActions(null)
+  }
+
+  const cancelEditing = () => {
+    setEditingMessage(null)
+    setEditText('')
+    setNewMessage('')
+  }
+
+  const handleMessageContextMenu = (e: React.MouseEvent, message: Message) => {
+    e.preventDefault()
+    setShowMessageActions({
+      messageId: message.id,
+      x: e.clientX,
+      y: e.clientY
+    })
+  }
+
+  const handleMessageLongPress = (message: Message) => {
+    setShowMessageActions({
+      messageId: message.id,
+      x: window.innerWidth / 2,
+      y: window.innerHeight / 2
+    })
   }
 
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1258,7 +1388,7 @@ export default function Home() {
                           </span>
                         </div>
                         <div className="flex items-center justify-between">
-                          <p className="text-sm text-text-light truncate">
+                          <p className="text-sm text-text-secondary truncate flex-1 mr-2">
                             {userLastMessages[member] ? (
                               userLastMessages[member].sender === currentUser ? 
                                 `You: ${userLastMessages[member].content}` : 
@@ -1268,7 +1398,7 @@ export default function Home() {
                             )}
                           </p>
                           {userLastMessages[member] && (
-                            <span className="text-xs text-text-light ml-2">
+                            <span className="text-xs text-text-light flex-shrink-0">
                               {format(new Date(userLastMessages[member].timestamp), 'HH:mm')}
                             </span>
                           )}
@@ -1419,9 +1549,25 @@ export default function Home() {
                             </div>
                           )}
                           
-                          <div className={`message-bubble ${
-                            isSent ? 'message-sent' : 'message-received'
-                          }`}>
+                          <div 
+                            className={`message-bubble ${
+                              isSent ? 'message-sent' : 'message-received'
+                            }`}
+                            onContextMenu={(e) => handleMessageContextMenu(e, message)}
+                            onTouchStart={() => {
+                              // Long press detection for mobile
+                              const timer = setTimeout(() => {
+                                handleMessageLongPress(message)
+                              }, 500)
+                              
+                              const handleTouchEnd = () => {
+                                clearTimeout(timer)
+                                document.removeEventListener('touchend', handleTouchEnd)
+                              }
+                              
+                              document.addEventListener('touchend', handleTouchEnd)
+                            }}
+                          >
                             {/* Display image if present */}
                             {message.has_image && message.image_url && (
                               <div className="mb-2">
@@ -1436,14 +1582,17 @@ export default function Home() {
                             )}
                             {/* Display text if present */}
                             {message.content && (
-                              <p className="break-words text-sm leading-relaxed">{message.content}</p>
+                              <p className="break-words text-base leading-normal whitespace-pre-wrap">{message.content}</p>
                             )}
-                            <p className={`text-xs mt-1 ${
-                              isSent ? 'text-white/70' : 'text-text-light'
+                            <p className={`text-xs mt-2 ${
+                              isSent ? 'text-white/80' : 'text-text-light'
                             }`}>
                               {format(new Date(message.timestamp), 'HH:mm')}
+                              {message.edited && (
+                                <span className="ml-2 text-xs opacity-80">(edited)</span>
+                              )}
                               {isSent && (
-                                <span className="ml-1">
+                                <span className="ml-2">
                                   <svg className="w-3 h-3 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                                   </svg>
@@ -1462,6 +1611,26 @@ export default function Home() {
 
             {/* Message input */}
             <div className="bg-chat-header border-t border-border-light p-4 safe-bottom">
+              {/* Editing indicator */}
+              {editingMessage && (
+                <div className="mb-3 bg-primary/10 border-l-4 border-primary px-3 py-2 rounded">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <p className="text-xs text-primary font-semibold mb-1">Editing message</p>
+                      <p className="text-sm text-text-secondary truncate">{editingMessage.content}</p>
+                    </div>
+                    <button
+                      onClick={cancelEditing}
+                      className="text-text-light hover:text-red-500 ml-2"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              )}
+              
               {/* Image preview */}
               {imagePreview && (
                 <div className="mb-3 relative inline-block">
@@ -1514,17 +1683,33 @@ export default function Home() {
                   className="hidden"
                 />
 
-                {/* Attachment button */}
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="text-text-light hover:text-primary p-2"
-                  title="Attach file"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                  </svg>
-                </button>
+                {/* Cancel edit button - only show when editing */}
+                {editingMessage && (
+                  <button
+                    type="button"
+                    onClick={cancelEditing}
+                    className="text-red-500 hover:text-red-600 p-2"
+                    title="Cancel edit"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+
+                {/* Attachment button - only show when not editing */}
+                {!editingMessage && (
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-text-light hover:text-primary p-2"
+                    title="Attach file"
+                  >
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                  </button>
+                )}
 
                 {/* Input container */}
                 <div className="flex-1 flex items-center gap-2 bg-gray-100 rounded-3xl px-4 py-3">
@@ -1532,9 +1717,9 @@ export default function Home() {
                     type="text"
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
-                    placeholder="Type a message..."
+                    placeholder={editingMessage ? "Edit message..." : "Type a message..."}
                     disabled={isUploading}
-                    className="flex-1 bg-transparent border-none focus:outline-none text-text-primary placeholder-text-light disabled:opacity-50 text-base"
+                    className="flex-1 bg-transparent border-none focus:outline-none text-text-primary placeholder-text-light disabled:opacity-50 text-base leading-relaxed"
                   />
                 </div>
 
@@ -1599,6 +1784,69 @@ export default function Home() {
               </div>
               <p className="text-lg font-medium text-text-primary mb-2">Select a chat to start messaging</p>
               <p className="text-sm text-text-light">Choose a conversation from the sidebar to begin</p>
+            </div>
+          </div>
+        )}
+
+        {/* Message Actions Context Menu */}
+        {showMessageActions && (
+          <div 
+            className="fixed inset-0 z-40"
+            onClick={() => setShowMessageActions(null)}
+          >
+            <div 
+              className="absolute bg-white rounded-lg shadow-lg border border-border-light py-2 min-w-[120px]"
+              style={{
+                left: Math.min(showMessageActions.x, window.innerWidth - 120),
+                top: Math.min(showMessageActions.y, window.innerHeight - 100)
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {(() => {
+                const message = messages.find(m => m.id === showMessageActions.messageId)
+                if (!message) return null
+                
+                return (
+                  <>
+                    {message.sender === currentUser && message.content && (
+                      <button
+                        onClick={() => startEditing(message)}
+                        className="w-full px-4 py-2 text-left text-sm text-text-primary hover:bg-gray-100 flex items-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                        Edit
+                      </button>
+                    )}
+                    {message.sender === currentUser && (
+                      <button
+                        onClick={() => handleDeleteMessage(message.id)}
+                        className="w-full px-4 py-2 text-left text-sm text-red-500 hover:bg-red-50 flex items-center gap-2"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                        Delete
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        if (message.content) {
+                          navigator.clipboard.writeText(message.content)
+                        }
+                        setShowMessageActions(null)
+                      }}
+                      className="w-full px-4 py-2 text-left text-sm text-text-primary hover:bg-gray-100 flex items-center gap-2"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                      Copy
+                    </button>
+                  </>
+                )
+              })()}
             </div>
           </div>
         )}
